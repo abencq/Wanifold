@@ -86,7 +86,6 @@ LTX2_ID_LORA_MAX_REFERENCE_SECONDS = 121.0 / 25.0
 LTX2_OUTPAINT_GAMMA = 2.0
 LTX2_DISABLE_STAGE2_WITH_CONTROL_VIDEO = True
 LTX2_ENABLE_EMBEDDING_LORAS = False
-LTX2_HDR_TRANSFORM = "logc3"
 LTX2_VAE_TEMPORAL_TILING_FPS = 24.0
 # The HDR transform the LTX-2 video VAE decodes to (scene-linear Rec.709
 # through it): the model spec may state its own one ("hdr_transform", e.g.
