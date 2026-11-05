@@ -37,6 +37,7 @@ from shared.attention import get_default_attention_mode
 from shared.utils import files_locator as fl
 from shared.utils import latent_io
 from shared.utils.audio_video import combine_and_concatenate_video_with_audio_tracks, save_hdr_video, save_video, write_wav_file
+from shared.utils.frame_scheduler import build_default_window_plan
 from shared.utils.utils import convert_image_to_tensor, convert_tensor_to_image, convert_video_tensor_to_uint8_chunked, filter_letters, get_video_info, has_video_file_extension
 from shared.utils.virtual_media import media_source_exists
 
@@ -2698,3 +2699,443 @@ def compute_fit_canvas(model_def, server_config, outpainting_dims):
         fit_crop = False
         fit_canvas = 0
     return fit_canvas, fit_canvas == 2
+
+
+# ---------------------------------------------------------------------------
+# generate_media integration (the latent refactor, phase 4): the branch
+# head-window plan and the per-window latent sidecar write, moved out of
+# wgp.generate_media (the two largest remaining hunks of that function)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class WindowPlan:
+    """The default-window plan inputs the branch head-window reshaping
+    reads (injected from ``wgp.generate_media``): the window-size budget,
+    the reuse/overlap defaults, the frame-count rounding knobs, whether
+    the family supports sliding windows and the model definition's plan
+    options (the closure pair of the Case B reshaping captured them as
+    free variables in ``wgp``)."""
+    sliding_window_size: int
+    default_reuse_frames: int
+    frames_minimum: int
+    frames_steps: int
+    frames_offset: int
+    sliding_window_defaults: dict
+    any_sliding_window: bool
+    model_def: dict
+
+
+def plan_branch_head_window(ctx, *, branch_latent_info, branch_prefix, branch_decode,
+                            branch_carried, prefix_error, decode_reason, all_latent_job,
+                            base_model_type, scheduler_active, seed, prompt, prompts,
+                            video_length, current_video_length, video_source,
+                            video_continuation_frames,
+                            sliding_window_discard_last_frames, sliding_window,
+                            frame_scheduler, scheduled_windows_template,
+                            default_windows_template, window_plan) -> dict:
+    """The branch job's determinism + head-window plan, moved verbatim from
+    ``wgp.generate_media`` (the latent refactor, phase 4).
+
+    The seed and the prompt are prefilled from the sidecar (only when the
+    fields are empty / random) so the branch reuses the source job's
+    conditioning, and the first window is reshaped into the branch head
+    window: Case A (the head window is [the frozen prefix | the new
+    latents that complete the containing window]) or Case B (the standard
+    first window keeps its geometry; its overlap becomes the frozen
+    prefix's decoded length). ``Gate 1`` refuses a latent-writing branch
+    job whose kept region genuinely cannot come from the latent file, and
+    the one-line plan receipt says what the job will produce.
+
+    The templates and the scheduler are mutated in place (and returned);
+    ``branch_prefix`` is returned (it is None when a reshaping rejects
+    the prefix for this run); ``refusal`` carries the Gate-1 message
+    (``wgp`` raises it as ``gr.Error``). ``video_continuation_frames`` is
+    the kept length of a classic video continuation (``wgp`` computes it:
+    its estimator is a ``wgp`` function, and a shared module must not
+    import ``wgp``).
+    """
+    refusal = None
+    if branch_prefix is not None and branch_latent_info is not None:
+        _prefill_seed = int(branch_latent_info.get("prefill_seed") or 0)
+        if seed is None and _prefill_seed > 0:
+            seed = _prefill_seed
+            print(f"From latent: the seed is prefilled from the source job ({seed}).")
+        _prefill_prompt = str(branch_latent_info.get("prefill_prompt") or "").strip()
+        if len(str(prompt or "").strip()) == 0 and len(_prefill_prompt) > 0:
+            prompt = _prefill_prompt
+            if scheduler_active:
+                if len(scheduled_windows_template) > 0:
+                    scheduled_windows_template[0]["prompt"] = _prefill_prompt
+                    frame_scheduler["prompts"] = [w.get("prompt", "") for w in scheduled_windows_template]
+            else:
+                prompts = [_prefill_prompt]
+        _head_discard = int(sliding_window_discard_last_frames) if sliding_window else 0
+        _prefix_latent_count = int(branch_prefix["prefix_latents"].shape[1])
+        # The sidecar's temporal layout: the frozen prefix decodes to
+        # 1 + stride * (P - 1) frames (4/1 for Wan/LongCat, 8/1 for LTX2).
+        _branch_stride = int((branch_latent_info.get("entry") or {}).get("latent_stride") or 4)
+        # The user's requested new frames (the scheduler replaced video_length
+        # with its own predicted total, so the request is read back from it).
+        _request = int(frame_scheduler.get("requested_total_frames") or current_video_length or video_length or 0) if scheduler_active else int(current_video_length or video_length or 0)
+        if not branch_prefix["cut_at_window_end"]:
+            # Case A: the head window is [the frozen prefix | the new
+            # latents that complete the containing window]; its frame
+            # count is fixed by the cut and the later windows keep the
+            # standard shape (the remaining ones make up the request).
+            _head_window = {
+                "prompt": "",
+                "output_frames": int(branch_prefix["head_output"] or 1),
+                "overlap_frames": int(branch_prefix["assembly_overlap"]),
+                "discard_last_frames": _head_discard,
+                "trim_last_frames": int(branch_prefix["head_trim_new"]),
+                "frame_num": int(branch_prefix["head_frame_num"]),
+                "new_shot": False,
+                "requested_output_frames": _request,
+            }
+            if scheduler_active:
+                if len(scheduled_windows_template) == 0:
+                    branch_prefix = None
+                else:
+                    _w0 = dict(scheduled_windows_template[0])
+                    _w0.update({
+                        "output_frames": int(branch_prefix["head_output"] or 1),
+                        "overlap_frames": int(branch_prefix["assembly_overlap"]),
+                        "discard_last_frames": _head_discard,
+                        "trim_last_frames": int(branch_prefix["head_trim_new"]),
+                        "frame_num": int(branch_prefix["head_frame_num"]),
+                        "new_shot": False,
+                        "requested_output_frames": _request,
+                    })
+                    scheduled_windows_template[0] = _w0
+                    # The request is the new segment after the kept region
+                    # (the classic continuation's reading of the frame
+                    # count): the head window's new frames consume the first
+                    # part of it, the remaining windows make up the rest,
+                    # and the kept region is on top of the request (zero
+                    # collapses the plan to the head window alone).
+                    _remaining = max(0, int(_request) - int(_w0["output_frames"]))
+                    if _remaining <= 0:
+                        scheduled_windows_template = [_w0]
+                    else:
+                        _sub = build_default_window_plan(
+                            total_frames=_remaining,
+                            window_size=window_plan.sliding_window_size,
+                            default_overlap=window_plan.default_reuse_frames,
+                            discard_last_frames=sliding_window_discard_last_frames,
+                            minimum=window_plan.frames_minimum,
+                            step=window_plan.frames_steps,
+                            frame_offset=window_plan.frames_offset,
+                            overlap_offset=window_plan.sliding_window_defaults.get("overlap_offset", 1),
+                            max_overlap=window_plan.sliding_window_defaults.get("overlap_max"),
+                            first_window_overlap=window_plan.default_reuse_frames,
+                            first_window_available_overlap=None,
+                            initial_shared_frames=0,
+                            preserve_exact_output_frames=window_plan.model_def.get("image_end_frame_position", False),
+                            output_frame_policy=window_plan.model_def.get("frame_scheduler_output_policy"),
+                        )
+                        scheduled_windows_template = [_w0] + _sub
+                    frame_scheduler["predicted_total_frames"] = int(branch_prefix["kept_frames"]) + sum(int(w.get("output_frames") or 0) for w in scheduled_windows_template)
+                    print(f"From latent: the window containing the cut contributes {int(_w0['output_frames'])} new frames of the requested {_request}; the remaining {max(0, len(scheduled_windows_template) - 1)} window(s) make up the rest (the kept {int(branch_prefix['kept_frames'])} frames are on top).")
+            elif window_plan.any_sliding_window:
+                # The request is the new segment after the kept region
+                # (the classic continuation's reading of the frame count):
+                # the head window's new frames consume the first part of
+                # it, the remaining windows make up the rest, and the kept
+                # region is on top of the request (zero collapses the plan
+                # to the head window alone).
+                _remaining = max(0, int(_request) - int(_head_window["output_frames"]))
+                if _remaining <= 0:
+                    default_windows_template = [_head_window]
+                    print(f"From latent: the window containing the cut covers the whole request ({int(_request)} new frames) after the {int(branch_prefix['kept_frames'])} kept frames; no further windows.")
+                else:
+                    _sub = build_default_window_plan(
+                        total_frames=_remaining,
+                        window_size=window_plan.sliding_window_size,
+                        default_overlap=window_plan.default_reuse_frames,
+                        discard_last_frames=sliding_window_discard_last_frames,
+                        minimum=window_plan.frames_minimum,
+                        step=window_plan.frames_steps,
+                        frame_offset=window_plan.frames_offset,
+                        overlap_offset=window_plan.sliding_window_defaults.get("overlap_offset", 1),
+                        max_overlap=window_plan.sliding_window_defaults.get("overlap_max"),
+                        first_window_overlap=window_plan.default_reuse_frames,
+                        first_window_available_overlap=None,
+                        initial_shared_frames=0,
+                        preserve_exact_output_frames=window_plan.model_def.get("image_end_frame_position", False),
+                        output_frame_policy=window_plan.model_def.get("frame_scheduler_output_policy"),
+                    )
+                    default_windows_template = [_head_window] + _sub
+                    print(f"From latent: the window containing the cut contributes {int(_head_window['output_frames'])} new frames of the requested {_request}; the remaining {len(_sub)} window(s) make up the rest (the kept {int(branch_prefix['kept_frames'])} frames are on top).")
+            else:
+                default_windows_template = [_head_window]
+            default_windows = [dict(window) for window in default_windows_template]
+            if not scheduler_active:
+                sliding_window = len(default_windows) > 1 or default_windows[0]["overlap_frames"] > 0
+        else:
+            # Case B: the standard first window keeps its geometry; its
+            # overlap becomes the frozen prefix's decoded length, so its
+            # new share is the small sliver left in the window's budget
+            # (the fit check already required the window to hold the kept
+            # run). The request is the new segment after the kept region
+            # (the classic continuation's reading of the frame count), so
+            # the tail windows make up the rest of it.
+            def _branch_case_b_window(w, discard):
+                _w = dict(w)
+                _w["overlap_frames"] = int(branch_prefix["assembly_overlap"])
+                _w["discard_last_frames"] = discard if not window_plan.any_sliding_window else int(_w.get("discard_last_frames") or 0)
+                _w["output_frames"] = max(1, int(_w.get("frame_num") or 0) - int(_w["overlap_frames"]) - int(_w["discard_last_frames"]))
+                _w["new_shot"] = False
+                return _w
+            def _branch_case_b_tail(w0):
+                _remaining = max(0, int(_request) - int(w0["output_frames"]))
+                if _remaining <= 0:
+                    return []
+                return build_default_window_plan(
+                    total_frames=_remaining,
+                    window_size=window_plan.sliding_window_size,
+                    default_overlap=window_plan.default_reuse_frames,
+                    discard_last_frames=sliding_window_discard_last_frames,
+                    minimum=window_plan.frames_minimum,
+                    step=window_plan.frames_steps,
+                    frame_offset=window_plan.frames_offset,
+                    overlap_offset=window_plan.sliding_window_defaults.get("overlap_offset", 1),
+                    max_overlap=window_plan.sliding_window_defaults.get("overlap_max"),
+                    first_window_overlap=window_plan.default_reuse_frames,
+                    first_window_available_overlap=None,
+                    initial_shared_frames=0,
+                    preserve_exact_output_frames=window_plan.model_def.get("image_end_frame_position", False),
+                    output_frame_policy=window_plan.model_def.get("frame_scheduler_output_policy"),
+                )
+            _case_b_ok = True
+            if _is_h3_family(base_model_type, window_plan.model_def):
+                # The piecewise 5/17 H3 layout decodes the kept run to
+                # 17k + 5 frames, not a linear stride/offset length; the
+                # capped window decodes to its target length, which the
+                # fit check already folded into guide_frames.
+                _prefix_decoded_frames = int(branch_prefix["guide_frames"])
+            else:
+                _prefix_decoded_frames = 1 + _branch_stride * (_prefix_latent_count - 1)
+            if scheduler_active:
+                if len(scheduled_windows_template) == 0 or int(scheduled_windows_template[0].get("frame_num") or 0) < _prefix_decoded_frames:
+                    _case_b_ok = False
+                else:
+                    scheduled_windows_template[0] = _branch_case_b_window(scheduled_windows_template[0], _head_discard)
+                    scheduled_windows_template = [scheduled_windows_template[0]] + _branch_case_b_tail(scheduled_windows_template[0])
+                    frame_scheduler["predicted_total_frames"] = int(branch_prefix["kept_frames"]) + sum(int(w.get("output_frames") or 0) for w in scheduled_windows_template)
+            elif window_plan.any_sliding_window:
+                if len(default_windows_template) == 0 or int(default_windows_template[0].get("frame_num") or 0) < _prefix_decoded_frames:
+                    _case_b_ok = False
+                else:
+                    default_windows_template[0] = _branch_case_b_window(default_windows_template[0], _head_discard)
+                    default_windows_template = [default_windows_template[0]] + _branch_case_b_tail(default_windows_template[0])
+            else:
+                if len(default_windows_template) == 0 or int(default_windows_template[0].get("frame_num") or 0) < _prefix_decoded_frames:
+                    _case_b_ok = False
+                else:
+                    default_windows_template[0] = _branch_case_b_window(default_windows_template[0], _head_discard)
+            if not _case_b_ok:
+                branch_prefix = None
+                print("From latent: the first window is too small to hold the carried prefix, so it uses a fresh encode for this run (the pre-cut part of the output video is rebuilt from the kept windows of the source latent file).")
+            else:
+                print(f"From latent: the first {_prefix_latent_count} latents of the first window keep the values of the source latent file unchanged (the branch point is the committed end of the contained window).")
+            default_windows = [dict(window) for window in default_windows_template]
+            if not scheduler_active:
+                sliding_window = len(default_windows) > 1 or default_windows[0]["overlap_frames"] > 0
+    # Gate 1: a latent-writing branch job whose prefix this run
+    # rejected still proceeds when the kept region is a fresh decode of
+    # the sidecar's kept windows (the branch_decode above): the head
+    # window uses a fresh encode and the job writes a self-contained
+    # file. It is refused only when the kept region genuinely cannot
+    # come from the latent file (the canvas / VAE tests failed, e.g. a
+    # canvas-changing mode or a file from another resolution / job):
+    # the message names the setting at fault and the honest option(s) —
+    # the pixel fallback (running the job without the latent file) only
+    # when a companion video is present to re-encode from.
+    if all_latent_job and branch_carried is not None and branch_prefix is None and branch_decode is None:
+        _refusal_reason = str(prefix_error or "").strip() or str(decode_reason or "").strip() or "the branch cannot use the kept region of the source latent file"
+        _option = ", or run the job without the latent file" if (branch_latent_info or {}).get("video_present", True) else ""
+        refusal = f"From latent: {_refusal_reason} The kept region cannot be reproduced from the latent file with this job's settings, so the branch is refused; change the setting{_option}."
+    # The plan receipt: what this job will produce, in one line. Printed
+    # only for jobs with a kept prefix (continuation and branch):
+    # "From latent:" when the kept region comes from the sidecar,
+    # "From video:" when it comes from the source video (including the
+    # latent-file fallback, whose reason the line above announced). The
+    # final length is the kept prefix plus the new frames the windows
+    # generate (the plan's output totals).
+    if video_source is not None or branch_prefix is not None or branch_decode is not None:
+        if branch_prefix is not None:
+            _plan_prefix = "From latent"
+            _plan_kept = int(branch_prefix["kept_frames"])
+            _plan_kept_part = f"kept {_plan_kept} (verbatim)"
+        elif branch_decode is not None:
+            _plan_prefix = "From latent"
+            _plan_kept = int(branch_decode[1])
+            _plan_kept_part = f"kept {_plan_kept} (from the latent file)"
+        else:
+            _plan_prefix = "From video"
+            _plan_kept = int(video_continuation_frames)
+            _plan_kept_part = f"{_plan_kept} source"
+        _plan_windows = scheduled_windows_template if scheduler_active else default_windows_template
+        _plan_new = sum(int(w.get("output_frames") or 0) for w in _plan_windows)
+        print(f"{_plan_prefix}: plan: {_plan_kept_part} + {_plan_new} new ({len(_plan_windows)} window(s)) = {_plan_kept + _plan_new} frames")
+    return {
+        "seed": seed,
+        "prompt": prompt,
+        "prompts": prompts,
+        "default_windows_template": default_windows_template,
+        "scheduled_windows_template": scheduled_windows_template,
+        "frame_scheduler": frame_scheduler,
+        "branch_prefix": branch_prefix,
+        "sliding_window": sliding_window,
+        "refusal": refusal,
+    }
+
+
+class LatentWindowRecorder:
+    """The per-window latent sidecar write, moved out of
+    ``wgp.generate_media`` (the latent refactor, phase 4).
+
+    The latent companion file is always written to disk (it is the
+    handoff for Latent Decode) but never echoed in API responses, so it
+    is kept out of the side-files dict. The all-latent sidecar is
+    rebuilt from the accumulated window blocks after every window, so it
+    is always decodable even mid-run; it is the file every latent-writing
+    job produces. The branch state and the model identity are fixed for
+    the job (the constructor — ``wgp`` builds the recorder once before
+    the window loop); the per-window values ride in with each
+    :meth:`on_window` call.
+    """
+
+    def __init__(self, ctx, *, branch_prefix=None, branch_decode=None,
+                 branch_carried=None, model_def, model_type, base_model_type,
+                 fake_start_image=False, branch_cut_video_block=None,
+                 branch_cut_audio_block=None):
+        self._ctx = ctx
+        self._branch_prefix = branch_prefix
+        self._branch_decode = branch_decode
+        self._branch_carried = branch_carried
+        self._model_def = model_def
+        self._model_type = str(model_type or "")
+        self._base_model_type = str(base_model_type or "")
+        self._fake_start_image = bool(fake_start_image)
+        self._h3_cut_video_block = branch_cut_video_block
+        self._h3_cut_audio_block = branch_cut_audio_block
+
+    def on_window(self, latent_file_obj, side_files, media_path, window_no, *,
+                  sliding_window, latent_windows, latent_audio_windows,
+                  reuse_frames, post_decode_pre_trim, trim_first_frames,
+                  source_video_overlap_frames_count, discard_last_frames,
+                  automatic_trim_last_frames, window_prefix_is_image,
+                  sample_is_hdr, image_start_tensor, written_frame_count):
+        """Rebuild and write the window's latent companion file (the block
+        moved verbatim from the end of ``wgp.generate_media``'s window
+        loop). ``side_files`` is mutated in place: the latent suffix is
+        popped out of it (when the pipeline wrote a classic sidecar)
+        before the other side files are written by ``wgp``."""
+        latent_side_bytes = None
+        if latent_file_obj is not None:
+            latent_entry = latent_file_obj.get(latent_io.LATENT_FORMAT_ID)
+            latent_audio_entry = latent_file_obj.get(latent_io.LATENT_FORMAT_ID_AUDIO)
+            if latent_entry is not None:
+                # The all-latent writer: the sidecar is the sole
+                # content source of the video, so every latent-writing
+                # job writes the all-latent file. That is a fresh job
+                # (no source video; an i2v start image is inside the
+                # first window's latents, not an external prefix) or a
+                # branch job — the latter whether its prefix was
+                # accepted (the kept latents are carried) or rejected
+                # with a kept-region decode (branch_decode set: the
+                # head window is a fresh encode over the decoded
+                # prefix, recorded like any i2v head, and the cut
+                # window's kept portion rides in the accumulator as
+                # its own stand-alone block, so the sidecar's
+                # committed total matches the written video and the
+                # file stays self-contained). A branch whose kept
+                # region cannot come from the latents is refused
+                # before generation (Gate 1), so it never reaches this
+                # decision (with Save Latents on, a continuation is
+                # turned into a branch before this point).
+                # ``splices_exact_image`` is the only family
+                # difference: True for LTX2 (the exact start image is
+                # spliced into frame 0 and embedded) and False for
+                # Wan / LongCat / MiniMax H3 (the decoded latent frame
+                # is kept, no image block).
+                _all_latent_splices = _is_ltx2_family(str(self._base_model_type or ""), self._model_def)
+                # The i2v start image is embedded, the trims are
+                # recorded per window, and the committed length
+                # is validated against the written video. A
+                # branch whose prefix this run rejected
+                # (branch_prefix None) propagates the source
+                # sidecar's embedded start image the same way
+                # an accepted branch does: its kept region's
+                # fresh decode spliced the image into frame 0
+                # of the written video, so the new sidecar
+                # embeds the block for the decode to splice
+                # back in (the block only exists on LTX2
+                # i2v-derived sidecars — None for every other
+                # family, where the writer ignores it).
+                _branch_carried_image = None
+                if self._branch_prefix is None and self._branch_decode is not None:
+                    _branch_carried_image = (self._branch_carried or {}).get("i2v_image")
+                    if not (isinstance(_branch_carried_image, dict)
+                            and str(_branch_carried_image.get("kind")) == "image_png"
+                            and isinstance(_branch_carried_image.get("data"), (bytes, bytearray))
+                            and len(_branch_carried_image["data"]) > 0):
+                        _branch_carried_image = None
+                    else:
+                        _branch_carried_image = {"kind": "image_png", "data": bytes(_branch_carried_image["data"])}
+                # The sidecar's canvas: the generation's out_width/out_height
+                # are not in scope in this block (the post-processing paths
+                # rewrite them), so derive the canvas from the latent grid the
+                # entry carries and the family's spatial factor (8 for the
+                # Wan-VAE families, 16 for the 5B Wan 2.2 VAE, MiniMax H3 and
+                # Magi Human, 32 for LTX2 — the _BRANCH_PREFIX_LAYOUTS table,
+                # with the factor the family predicate knows for the families
+                # not in the table yet).
+                _latent_layout = _BRANCH_PREFIX_LAYOUTS.get(str(self._base_model_type or ""))
+                if _latent_layout is not None:
+                    _latent_canvas_factor = int(_latent_layout[2])
+                elif _is_magi_human_family(str(self._base_model_type or ""), self._model_def):
+                    # The Turbo VAED's spatial compression (Magi is not
+                    # in the prefix table yet — the branch's frozen prefix
+                    # is not supported — but the canvas factor is known,
+                    # so the sidecar records the true canvas).
+                    _latent_canvas_factor = 16
+                else:
+                    _latent_canvas_factor = 0
+                _latent_shape = [int(u) for u in (latent_entry.get("shape") or [])]
+                if len(_latent_shape) < 4:
+                    _latent_shape = list(latent_io.payload_latents(latent_entry).shape)
+                _latent_grid_ok = len(_latent_shape) >= 4 and _latent_canvas_factor > 0
+                _latent_width = int(_latent_shape[-1] * _latent_canvas_factor) if _latent_grid_ok else 0
+                _latent_height = int(_latent_shape[-2] * _latent_canvas_factor) if _latent_grid_ok else 0
+                latent_side_bytes = _all_latent_sidecar(self._ctx,
+                    latent_entry, latent_audio_entry, window_no, latent_windows, latent_audio_windows,
+                    branch_prefix=self._branch_prefix,
+                    branch_carried_image=_branch_carried_image,
+                    sliding_window=sliding_window,
+                    reuse_frames=reuse_frames,
+                    post_decode_pre_trim=post_decode_pre_trim,
+                    trim_first_frames=trim_first_frames,
+                    source_video_overlap_frames_count=source_video_overlap_frames_count,
+                    discard_last_frames=discard_last_frames,
+                    automatic_trim_last_frames=automatic_trim_last_frames,
+                    window_prefix_is_image=window_prefix_is_image,
+                    fake_start_image=self._fake_start_image,
+                    sample_is_hdr=sample_is_hdr,
+                    image_start_tensor=image_start_tensor,
+                    written_frame_count=written_frame_count,
+                    model_def=self._model_def,
+                    model_type=self._model_type,
+                    base_model_type=self._base_model_type,
+                    width=_latent_width,
+                    height=_latent_height,
+                    splices_exact_image=_all_latent_splices,
+                    branch_cut_video_block=self._h3_cut_video_block,
+                    branch_cut_audio_block=self._h3_cut_audio_block)
+        else:
+            latent_side_bytes = side_files.pop(latent_io.LATENT_SIDECAR_SUFFIX, None) if isinstance(side_files, dict) else None
+        if latent_side_bytes is not None:
+            latent_io.write_latent_file_bytes(latent_io.latent_sidecar_path(media_path), latent_side_bytes)
+            print(f"Latent file saved to Path: {os.path.abspath(latent_io.latent_sidecar_path(media_path))}", flush=True)
