@@ -1559,7 +1559,7 @@ def validate_settings(state, model_type, single_prompt, inputs, silent=False):
         replace_voice_sample2 = None
     if not replace_voice_meta["needs_voice_sample2"]:
         replace_voice_sample2 = None
-    if len(filter_letters(image_prompt_type, "VLG")) > 0 and len(keep_frames_video_source) > 0:
+    if len(filter_letters(image_prompt_type, "VLG")) > 0 and len(str(keep_frames_video_source or "")) > 0:
         if not is_integer(keep_frames_video_source) or int(keep_frames_video_source) == 0:
             return err("The number of frames to keep must be a non null integer")
     else:
@@ -8025,7 +8025,7 @@ def generate_media(
     display_alt_prompts = alt_prompts.copy()
     display_original_alt_prompts = prompt_parser.split_prompt_units(str(alt_prompt or ""), alt_prompt_mode, originals=True) if alt_prompt_has_history else display_alt_prompts.copy()
     frames_minimum, frames_steps, latent_size = get_model_min_frames_and_step(model_type)
-    parsed_keep_frames_video_source= max_source_video_frames if len(keep_frames_video_source) ==0 else int(keep_frames_video_source) 
+    parsed_keep_frames_video_source= max_source_video_frames if len(str(keep_frames_video_source or "")) == 0 else int(keep_frames_video_source) 
     transformer_loras_filenames, transformer_loras_multipliers  = get_transformer_loras(model_type)
     lora_dir = get_lora_dir(model_type)
     if guidance_phases < 1: guidance_phases = 1
