@@ -99,7 +99,7 @@ from shared.utils.virtual_media import get_virtual_image, get_virtual_media_entr
 from shared.utils.frame_scheduler import SLASH_BLOCK_RE, build_default_window_plan, build_extension_window, build_frame_scheduler, fit_video_length, floor_frame_count, has_slash_commands, normalize_frame_count, set_video_length_rounding, prepare_loras_mult_windows, resolve_window_geometry
 from shared.match_archi import match_nvidia_architecture
 from shared.attention import ATTENTION_MODE_AVAILABILITY, get_attention_modes, get_supported_attention_modes, get_default_attention_mode, get_override_attention_modes, get_supported_override_attention_modes
-from shared.utils.utils import truncate_for_filesystem, sanitize_file_name, process_images_multithread, get_default_workers, resize_lanczos_frames, expand_or_shrink_mask, prepare_binary_mask_frame
+from shared.utils.utils import truncate_for_filesystem, sanitize_file_name, process_images_multithread, get_default_workers, resize_lanczos_frames, expand_or_shrink_mask, prepare_binary_mask_frame, filter_letters, add_to_sequence, del_in_sequence
 from shared.utils.process_locks import (
     acquire_GPU_ressources,
     acquire_main_GPU_ressources,
@@ -15224,29 +15224,6 @@ def any_letters(source_str, letters):
 
 def force_control_video_trim_visible(model_def, image_mode, video_prompt_type, audio_prompt_type):
     return image_mode == 0 and not model_def.get("control_video_trim", False) and not model_def.get("control_video_trim_disabled", False) and ("V" in video_prompt_type or any_letters(audio_prompt_type, "ABX"))
-
-def filter_letters(source_str, letters, default= ""):
-    ret = ""
-    for letter in letters:
-        if letter in source_str:
-            ret += letter
-    if len(ret) == 0:
-        return default
-    return ret    
-
-def add_to_sequence(source_str, letters):
-    ret = source_str
-    for letter in letters:
-        if not letter in source_str:
-            ret += letter
-    return ret    
-
-def del_in_sequence(source_str, letters):
-    ret = source_str
-    for letter in letters:
-        if letter in source_str:
-            ret = ret.replace(letter, "")
-    return ret    
 
 def set_audio_sources(audio_prompt_type, sources, letters_filter):
     audio_prompt_type = add_to_sequence(del_in_sequence(audio_prompt_type, letters_filter), sources)
