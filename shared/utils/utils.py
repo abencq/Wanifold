@@ -120,6 +120,29 @@ def truncate_for_filesystem(s, max_bytes=None):
         else: r = m - 1
     return s[:l]
 
+def filter_letters(source_str, letters, default= ""):
+    ret = ""
+    for letter in letters:
+        if letter in source_str:
+            ret += letter
+    if len(ret) == 0:
+        return default
+    return ret    
+
+def add_to_sequence(source_str, letters):
+    ret = source_str
+    for letter in letters:
+        if not letter in source_str:
+            ret += letter
+    return ret    
+
+def del_in_sequence(source_str, letters):
+    ret = source_str
+    for letter in letters:
+        if letter in source_str:
+            ret = ret.replace(letter, "")
+    return ret    
+
 def get_default_workers():
     return os.cpu_count()/ 2
 
