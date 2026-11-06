@@ -1324,15 +1324,24 @@ def _all_latent_sidecar(ctx, latent_entry, latent_audio_entry, window_no, latent
                 # for an i2v window 1, the window's own overlap for k > 1).
                 head_trim = int(branch_sidecar.get("containing_window_head_trim") or 0)
         else:
-            # LTX2 / Wan / LongCat: a mid-window cut keeps the containing
-            # window's own recorded head trim (0 for an all-latent t2v
-            # window 1, the i2v image slot for an LTX2 i2v window 1, the
-            # decoded image frame's slot for a Wan i2v window 1, the
-            # window's own overlap for k > 1); a cut on a window boundary
-            # is a fresh standard window, so the block records the
-            # assembly overlap the job trims from its decoded sample.
-            if bool(branch_sidecar.get("cut_at_window_end")):
-                head_trim = int(branch_sidecar.get("assembly_overlap") or 0)
+            # LTX2 / Wan / LongCat / Magi Human: an accepted prefix freezes
+            # the kept latents at the head of *this* window's own latent
+            # run, so the block itself carries the kept region and commits
+            # it - the recorded head trim is the containing window's own
+            # head trim (0 for an all-latent t2v window 1, the i2v image
+            # slot for an LTX2 i2v window 1, the decoded image frame's slot
+            # for a Wan i2v window 1, the window's own overlap for k > 1),
+            # exactly as for a mid-window cut. The exception is a window-end
+            # cut whose kept run is longer than the window's frozen head
+            # (the source sidecar keeps earlier windows in front of it, or
+            # an i2v window-1 head trim leaves the spliced image frame
+            # outside the assembly overlap): those frames come from a
+            # stand-alone decode, so the block keeps recording the assembly
+            # overlap the assembly trims it by.
+            _kept = int(branch_sidecar.get("kept_frames") or 0)
+            _overlap = int(branch_sidecar.get("assembly_overlap") or 0)
+            if bool(branch_sidecar.get("cut_at_window_end")) and _kept != _overlap:
+                head_trim = _overlap
             else:
                 head_trim = int(branch_sidecar.get("containing_window_head_trim") or 0)
     elif window_no == 1:

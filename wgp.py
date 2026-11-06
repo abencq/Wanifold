@@ -9411,7 +9411,28 @@ def generate_media(
                         # the sidecar's kept audio latents (sliced by time
                         # ratio), so the model skips the waveform re-encode.
                         latent_gen_kwargs["prefix_audio_latents"] = branch_prefix["prefix_audio_latents"]
-                if branch_decode is not None and window_no == 1:
+                # The LTX2 head window's own decode already contains the
+                # kept region whenever that region is exactly the window's
+                # frozen head (no carried window in front of it, no image
+                # frame outside the assembly overlap). A second decode of
+                # the same latents is then both redundant and harmful: the
+                # VAE decode is stochastic and temporally tiled, so it
+                # differs from the window's decode, and splicing it in is
+                # what leaves the seam at the cut. Every other shape (K >
+                # 1, an i2v-derived source, a rejected prefix, the
+                # deterministic families) keeps the fresh decode, as does
+                # HDR output: the join's HDR path re-maps the prefix's
+                # range in place, which a slice of the sample must never
+                # pass through (the job-level flag is the same test the
+                # model applies to decide its own HDR output).
+                _branch_head_covers_kept = (
+                    branch_prefix is not None and window_no == 1
+                    and latent_jobs._is_ltx2_family(str(base_model_type or ""), model_def)
+                    and int(branch_prefix.get("kept_frames") or 0) > 0
+                    and int(branch_prefix.get("kept_frames") or 0)
+                        == int(source_video_overlap_frames_count)
+                    and "&" not in video_prompt_type)
+                if branch_decode is not None and window_no == 1 and not _branch_head_covers_kept:
                     # Step 2: the kept region is a fresh decode of the
                     # source sidecar's kept windows (the pipeline returns
                     # it as decoded_prefix; the job uses it as the output
@@ -9688,6 +9709,22 @@ def generate_media(
                 # prefix included: its kept region is its own decode).
                 if window_no == 1 and branch_decoded_prefix is not None:
                     prefix_video = branch_decoded_prefix
+                elif (_branch_head_covers_kept and sample is not None
+                        and 0 < int(source_video_overlap_frames_count) < int(sample.shape[1])):
+                    # The window's head *is* the kept region: the
+                    # conditioning replaced the window's first latents with
+                    # the sidecar's kept latents and the zero denoise mask
+                    # kept them clean at every step of both stages, so the
+                    # window's own decode of them is the pixel-exact kept
+                    # run (a separate decode of the same latents is not:
+                    # fresh noise draws, a different temporal tile split).
+                    # Taking the head from `sample` leaves the join block
+                    # below running unchanged - guide_start_frame, the audio
+                    # trims and the recorded head trims all stay as they
+                    # are. (`sample`'s head slice, so the join's HDR range
+                    # remap must not see it: the predicate above excludes
+                    # HDR output.)
+                    prefix_video = sample[:, :int(source_video_overlap_frames_count)]
                 stop_current_sample = stop_sample_scheduled or (not (is_image or audio_only) and sample.shape[1] < current_video_length)
                 # if True: # for testing
                 #     torch.save(sample, "output.pt")
