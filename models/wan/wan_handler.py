@@ -204,6 +204,12 @@ class family_handler():
         ]
         extra_model_def["i2v_class"] = i2v =  test_class_i2v(base_model_type)
         extra_model_def["t2v_class"] = t2v =  test_class_t2v(base_model_type)
+        # A branch re-encodes the decoded tail of its kept region: "guide_pixels" through the
+        # class's own guide door, "encoded_head" for the text-only classes that have no door.
+        if base_model_type in ("i2v", "i2v_2_2", "ti2v_2_2"):
+            extra_model_def["branch_pixel_rule"] = "guide_pixels"
+        elif base_model_type in ("t2v", "t2v_1.3B", "t2v_2_2", "shotplan_t2v", "shotplan_t2v_2_2"):
+            extra_model_def["branch_pixel_rule"] = "encoded_head"
         extra_model_def["multitalk_class"] = multitalk = test_multitalk(base_model_type)
         extra_model_def["standin_class"] = standin = test_standin(base_model_type)
         extra_model_def["lynx_class"] = lynx = test_lynx(base_model_type)

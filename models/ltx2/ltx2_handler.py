@@ -561,6 +561,8 @@ class family_handler:
             "prompt_enhancer_video_duration": True,
             "frames_minimum": 17,
             "frames_steps": 8,
+            # The head window takes the pixel rule through its guide doors.
+            "branch_pixel_rule": "guide_pixels",
             "sliding_window": not msr,
             "returns_audio": True,
             "audio_window_alignment": True,

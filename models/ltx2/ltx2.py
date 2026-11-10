@@ -14,7 +14,7 @@ from mmgp import offload
 from accelerate import init_empty_weights
 from safetensors.torch import load_file
 from shared.utils import files_locator as fl
-from shared.utils import latent_io
+from shared.utils import latent_branch_head, latent_io
 from shared.utils.phase_progress import generation_progress
 from shared.cuda_memory import mmgp_vram_allocator
 from shared.utils.hdr import VIDEO_PROMPT_HDR_OUTPUT_FLAG, hdr_linear_to_vae_range, sdr_to_vae_range
@@ -710,6 +710,58 @@ def _normalize_temporal_overlap(overlap_frames: int, tile_frames: int) -> int:
         overlap_frames = int(round(overlap_frames / 8) * 8)
     overlap_frames = max(0, min(overlap_frames, max(0, tile_frames - 8)))
     return overlap_frames
+
+
+def _decode_latent_tail(video_decoder, latents, tiling_config=None, interrupt_check=None):
+    """The pixels behind a stretch of kept latents, as one decode of that stretch.
+
+    A branch's head window is guided by frames, encoded once per stage, exactly as a
+    continuation from a video file is. The decoder's uint8 ``[F, H, W, C]`` output becomes
+    the float ``[C, F, H, W]`` in [-1, 1] a guide is handed over in. Returns None when
+    there is no decoder or the decode came back empty; the caller then runs the window
+    without a guide and says so.
+    """
+    if video_decoder is None or latents is None or not torch.is_tensor(latents):
+        return None
+    from .ltx_core.model.video_vae import decode_video_to_tensor
+    lat = latents if latents.dim() == 5 else latents.unsqueeze(0)
+    first_param = next(video_decoder.parameters(), None)
+    lat = lat.to(device=first_param.device if first_param is not None else torch.device("cpu"),
+                 dtype=first_param.dtype if first_param is not None else torch.float16)
+    tail = decode_video_to_tensor(lat, video_decoder, tiling_config, interrupt_check=interrupt_check)
+    if tail is None or int(tail.shape[0]) == 0:
+        return None
+    return tail.permute(3, 0, 1, 2).float().div_(127.5).sub_(1.0)
+
+
+def _sidecar_window_decoder(video_decoder, tiling_config, interrupt_check, *,
+                            hdr_enabled=False, hdr_transform=None, device=None):
+    """The decode of one sidecar window, as ``decode_kept_windows`` expects it.
+
+    Takes one window spec and returns that window's frames as a ``[3, f, h, w]`` CPU
+    tensor - uint8 for an SDR sidecar, the HDR transform's output for an HDR one. The
+    kept latents hold the dtype they were saved in, so they are cast to the decoder's own
+    device and dtype first, as the Latent Decode job does them.
+    """
+    from .ltx_core.model.video_vae import decode_video_to_tensor
+
+    _first_param = next(video_decoder.parameters(), None)
+    _dec_device = _first_param.device if _first_param is not None else device
+    _dec_dtype = _first_param.dtype if _first_param is not None else torch.float16
+
+    def _decode_window(spec):
+        _lat = spec["latents"].to(device=_dec_device, dtype=_dec_dtype)
+        if _lat.dim() == 4:
+            _lat = _lat.unsqueeze(0)
+        _video = decode_video_to_tensor(
+            _lat, video_decoder, tiling_config, interrupt_check=interrupt_check,
+            hdr_transform=hdr_transform if hdr_enabled else None,
+            output_dtype=torch.float16 if hdr_enabled else None)
+        if _video is None:
+            return None
+        return _video.permute(3, 0, 1, 2).contiguous().to("cpu")
+
+    return _decode_window
 
 
 def _build_tiling_config(tile_size: int | tuple | list | None, fps: float | None) -> TilingConfig | None:
@@ -1843,35 +1895,78 @@ class LTX2:
 
         latent_conditioning_stage2 = None
 
-        # Latent Branch (Phase 2): on the head window of a plain
-        # continuation job the frozen prefix is the sidecar's kept latents
-        # verbatim, injected as a latent-index conditioning at the window's
-        # first latent (exactly like the start-image path, where the denoise
-        # mask keeps the injected tokens clean at every step of both
-        # stages). The guide pixels are not re-encoded. Any mismatch with
-        # this window's latent grid falls back to the pixel-prefix path.
-        prefix_video_latent = None
+        # Latent branch: the head window is guided by the decoded kept tail instead of a
+        # video file's pixels, and from there the two jobs run the same code. The kept
+        # latents cannot be that guide: they slice the source run, not this window's
+        # grid, and a frozen head off the window's grid costs the rest of the window.
+        branch_prefix_guide = None
+        _kept_pixels_cache = []
+
+        def _kept_region_frames():
+            """The kept region of the source latent file as frames, decoded once.
+
+            The head window's guide and the output video's kept prefix are these same
+            frames. Each window decodes from its own causal origin: a stretch that starts
+            off one decodes short and wrong.
+            """
+            if _kept_pixels_cache:
+                return _kept_pixels_cache[0]
+            _frames = None
+            if prefix_kept_windows and int(prefix_kept_frames or 0) > 0:
+                try:
+                    _frames = latent_io.decode_kept_windows(
+                        _sidecar_window_decoder(
+                            self.video_decoder, _build_tiling_config(VAE_tile_size, fps),
+                            lambda: self._interrupt, hdr_enabled=bool(hdr_enabled),
+                            hdr_transform=self.model_def.get("ltx2_hdr_transform"), device=self.device),
+                        prefix_kept_windows, int(prefix_kept_frames),
+                        is_i2v=bool(prefix_is_i2v),
+                        i2v_image_frames=prefix_i2v_image_frames if prefix_is_i2v else None)
+                except Exception as exc:
+                    raise latent_branch_head.BranchRefusal(
+                        f"[WanGP][LTX2] The kept region of the source latent file could not be decoded ({exc}); "
+                        f"the branch has no other source for these pixels.")
+            _kept_pixels_cache.append(_frames)
+            return _frames
+
         if (window_no == 1 and image_start is None
-                and input_video is not None and int(prefix_frames_count or 0) > 0
+                and int(prefix_frames_count or 0) > 0
                 and input_frames is None and input_frames2 is None
                 and input_ref_images is None and video_conditioning is None
                 and frozen_control_video is None and not msr and not editanything
-                and joyai_context is None and prefix_latents is not None):
+                and joyai_context is None and prefix_latents is not None
+                and not hdr_enabled):
             _pv = prefix_latents
             if _pv.dim() == 5 and _pv.shape[0] == 1:
                 _pv = _pv[0]
-            _pv_rh = int(height)
-            _pv_rw = int(width)
-            _pv_rh = int(math.ceil(_pv_rh / 64) * 64)
-            _pv_rw = int(math.ceil(_pv_rw / 64) * 64)
+            _pv_rh = int(math.ceil(int(height) / 64) * 64)
+            _pv_rw = int(math.ceil(int(width) / 64) * 64)
             _pv_z = int(getattr(self.video_encoder, "latent_channels", 0) or 0)
             _pv_t = (int(frame_num) - 1) // int(latent_stride) + 1
             if (_pv.dim() == 4 and int(_pv.shape[0]) == _pv_z and 0 < int(_pv.shape[1]) <= _pv_t
                     and int(_pv.shape[2]) == _pv_rh // 32 and int(_pv.shape[3]) == _pv_rw // 32):
-                prefix_video_latent = _pv
-                print(f"[WanGP][LTX2] The first {int(_pv.shape[1])} latents of the head window are the kept latents of the source latent file (latent branch); the guide pixels are not re-encoded.")
+                _guide_frames = int(prefix_frames_count or 0)
+                _region = _kept_region_frames() if _guide_frames > 0 else None
+                if _region is not None and int(_region.shape[1]) > 0 and _region.dtype == torch.uint8:
+                    # The head window stands on the end of the kept region, handed over in
+                    # a guide's levels; HDR output stays out of this route.
+                    branch_prefix_guide = _region[:, -_guide_frames:].float().div_(127.5).sub_(1.0)
+                elif int(_pv.shape[1]) > 0:
+                    # No kept-window decode: decode the tail's own latents instead. They
+                    # start off a causal origin, so the frames come back slightly short.
+                    branch_prefix_guide = _decode_latent_tail(
+                        self.video_decoder, _pv, _build_tiling_config(VAE_tile_size, fps),
+                        interrupt_check=lambda: self._interrupt)
+                if branch_prefix_guide is not None:
+                    print(f"[WanGP][LTX2] The kept latents of the source latent file were decoded to the {int(branch_prefix_guide.shape[1])} guide frames of the head window (latent branch): they are encoded per stage and held at its first latent at strength {float(input_video_strength):.2f}, exactly as the frames a continuation from a video file reads.")
+                else:
+                    raise latent_branch_head.BranchRefusal(
+                        "[WanGP][LTX2] The kept latents of the source latent file could not be decoded into "
+                        "guide frames; the head window of a latent branch is never left unanchored.")
             else:
                 print(f"[WanGP][LTX2] The video prefix of the source latent file {tuple(int(u) for u in _pv.shape)} does not match the latent grid of this window ([1, {_pv_z}, <= {_pv_t}, {_pv_rh // 32}, {_pv_rw // 32}]); the head window uses a fresh encode of the guide pixels.")
+        elif window_no == 1 and prefix_latents is not None and hdr_enabled:
+            print("[WanGP][LTX2] HDR output: the kept latents of the source latent file have no pixel guide to become, so the head window starts unanchored.")
 
         images = []
         guiding_images = []
@@ -1887,12 +1982,19 @@ class LTX2:
         stage2_override = False
 
         def _append_prefix_entries(target_list, extra_list=None):
-            if input_video is None or is_start_image_only:
-                return
-            frame_count = min(prefix_frames_count, input_video.shape[1])
+            if branch_prefix_guide is not None:
+                # An ordinary guide from here: the same entry, index and strength a
+                # continuation from a video file arrives with.
+                guide, keep_first = branch_prefix_guide, False
+            else:
+                if input_video is None or is_start_image_only:
+                    return
+                guide, keep_first = input_video, True
+            frame_count = min(int(prefix_frames_count or 0), int(guide.shape[1]))
             if frame_count <= 0:
                 return
-            entry = (input_video[:, :frame_count].permute(1, 2, 3, 0), 0, input_video_strength)
+            keep = guide[:, :frame_count] if keep_first else guide[:, -frame_count:]
+            entry = (keep.permute(1, 2, 3, 0), 0, input_video_strength)
             target_list.append(entry)
             if extra_list is not None:
                 extra_list.append(entry)
@@ -1906,10 +2008,7 @@ class LTX2:
                     extra_list.append(entry)
 
         if image_start is None:
-            # The pixel prefix is the Phase 0 stand-in for the frozen
-            # prefix; a valid sidecar prefix (Phase 2) replaces it.
-            if prefix_video_latent is None:
-                _append_prefix_entries(images, images_stage2)
+            _append_prefix_entries(images, images_stage2)
         else:
             entry = (image_start, _to_latent_index(0, latent_stride), input_video_strength, "lanczos")
             images.append(entry)
@@ -1933,10 +2032,8 @@ class LTX2:
         audio_conditionings = None
         audio_conditionings_stage2 = None
         audio_identity_guidance_scale = 0.0
-        # Latent Branch (Phase 2): the head window's audio prefix is the
-        # sidecar's kept audio latents (sliced by time ratio), so the source
-        # waveform is not re-encoded for it; the remaining audio frames are
-        # denoised on from the frozen prefix like a continuation.
+        # The head window's audio prefix is the source file's own audio latents, sliced to
+        # the span the model freezes, so that waveform is not re-encoded.
         prefix_audio_latent = None
         if prefix_audio_latents is not None:
             _pa = prefix_audio_latents
@@ -1957,7 +2054,7 @@ class LTX2:
                 if (int(_pa.shape[1]) == int(_pa_target.channels) and int(_pa.shape[3]) == int(_pa_target.mel_bins)
                         and 0 < int(_pa.shape[2]) <= int(_pa_target.frames)):
                     prefix_audio_latent = _pa.to(device=self.device, dtype=self.dtype)
-                    print(f"[WanGP][LTX2] The first {int(_pa.shape[2])} audio latents of the head window are the kept latents of the source latent file (latent branch); the source waveform is not re-encoded.")
+                    print(f"[WanGP][LTX2] The first {int(_pa.shape[2])} audio latents of the head window are carried from the source latent file (latent branch); the source waveform is not re-encoded.")
                 else:
                     print(f"[WanGP][LTX2] The audio prefix of the source latent file {tuple(int(u) for u in _pa.shape)} does not match the audio target of this window ({int(_pa_target.frames)} latent frames, {int(_pa_target.channels)} channels, {int(_pa_target.mel_bins)} mel); the head window re-encodes the source waveform.")
             else:
@@ -2104,7 +2201,9 @@ class LTX2:
         if not 0 < prompt_relay_epsilon < 1:
             prompt_relay_epsilon = 1e-3
         prompt_relay_frame_offset = 0
-        if int(window_no or 1) > 1 or (input_video is not None and not is_start_image_only):
+        # A latent prefix counts as a guide video: the relay skips the frozen frames
+        # even when the job has no companion video.
+        if int(window_no or 1) > 1 or (input_video is not None and not is_start_image_only) or branch_prefix_guide is not None:
             prompt_relay_frame_offset = max(0, int(prefix_frames_count or 0))
         ltx2_22B_class = self.model_def.get("ltx2_22B_class", False)
 
@@ -2142,7 +2241,6 @@ class LTX2:
                 alt_scale=float(alt_scale),
                 sample_solver=sample_solver,
                 images=images,
-                prefix_video_latent=prefix_video_latent,
                 guiding_images=guiding_images or None,
                 guiding_images_stage2=guiding_images_stage2 or None,
                 images_stage2=images_stage2 if stage2_override else None,
@@ -2200,7 +2298,6 @@ class LTX2:
                 prompt_relay_frame_offset=prompt_relay_frame_offset,
                 prompt_relay_epsilon=prompt_relay_epsilon,
                 images=images,
-                prefix_video_latent=prefix_video_latent,
                 guiding_images=guiding_images or None,
                 guiding_images_stage2=guiding_images_stage2 or None,
                 images_stage2=images_stage2 if stage2_override else None,
@@ -2403,35 +2500,23 @@ class LTX2:
             # video's prefix instead of a re-extraction of the source video
             # (source independence). Best effort: any failure keeps the
             # source-pixel prefix the job extracted before the model call.
-            from .ltx_core.model.video_vae import decode_video_to_tensor
-            def _decode_kept_window(spec):
-                # The kept latents keep the dtype they were saved in
-                # (often fp16), while the decoder weights may be bf16;
-                # cast to the decoder's own device and dtype, like the
-                # Latent Decode job does, or the decode fails on the
-                # mismatch and the output silently keeps the
-                # source-pixel prefix.
-                _first_param = next(self.video_decoder.parameters(), None)
-                _dec_device = _first_param.device if _first_param is not None else self.device
-                _dec_dtype = _first_param.dtype if _first_param is not None else torch.float16
-                _lat = spec["latents"].to(device=_dec_device, dtype=_dec_dtype)
-                if _lat.dim() == 4:
-                    _lat = _lat.unsqueeze(0)
-                _video = decode_video_to_tensor(
-                    _lat, self.video_decoder, tiling_config,
-                    interrupt_check=interrupt_check,
-                    hdr_transform=self.model_def["ltx2_hdr_transform"] if hdr_enabled else None,
-                    output_dtype=torch.float16 if hdr_enabled else None)
-                if _video is None:
-                    return None
-                return _video.permute(3, 0, 1, 2).contiguous().to("cpu")
-            try:
-                decoded_prefix = latent_io.decode_kept_windows(
-                    _decode_kept_window, prefix_kept_windows, int(prefix_kept_frames),
-                    is_i2v=bool(prefix_is_i2v),
-                    i2v_image_frames=prefix_i2v_image_frames if prefix_is_i2v else None)
-                if decoded_prefix is not None:
-                    result["decoded_prefix"] = decoded_prefix
-            except Exception as exc:
-                print(f"[WanGP][LTX2] The kept region of the branch could not be decoded ({exc}); the output keeps the source-pixel prefix.")
+            if _kept_pixels_cache and _kept_pixels_cache[0] is not None:
+                # The guide decode already covered this stretch; the prefix is those frames.
+                result["decoded_prefix"] = _kept_pixels_cache[0]
+            else:
+                try:
+                    decoded_prefix = latent_io.decode_kept_windows(
+                        _sidecar_window_decoder(
+                            self.video_decoder, tiling_config, interrupt_check,
+                            hdr_enabled=bool(hdr_enabled),
+                            hdr_transform=self.model_def.get("ltx2_hdr_transform"), device=self.device),
+                        prefix_kept_windows, int(prefix_kept_frames),
+                        is_i2v=bool(prefix_is_i2v),
+                        i2v_image_frames=prefix_i2v_image_frames if prefix_is_i2v else None)
+                    if decoded_prefix is not None:
+                        result["decoded_prefix"] = decoded_prefix
+                except Exception as exc:
+                    raise latent_branch_head.BranchRefusal(
+                        f"[WanGP][LTX2] The kept region of the branch could not be decoded ({exc}); "
+                        f"the branch keeps no other pixels than the latent file's.")
         return result

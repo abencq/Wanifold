@@ -482,6 +482,7 @@ def compute_sliding_window_no(current_video_length, sliding_window_size, discard
     left_after_first_window = current_video_length - sliding_window_size + discard_last_frames
     return 1 + math.ceil(left_after_first_window / (sliding_window_size - discard_last_frames - reuse_frames))
 
+
 def estimate_first_window_overlap_frames(image_start, video_source, keep_frames_video_source, target_fps):
     if image_start is not None:
         return 1
@@ -7588,6 +7589,16 @@ def record_file_metadata(video_path, configs, is_image, audio_only, gen, embedde
 
 
 
+def _branch_decode_refusal(reason):
+    """Why a branch job stops when its latent file cannot be decoded: the kept
+    part of the video only exists in that file, so it is never copied from the
+    source video (the video is a preview of the latent, not a second source)."""
+    return (f"From latent: the branch is refused: the pre-cut part of the output video can only be "
+            f"rebuilt from the source latent file, and that file could not be decoded for this job ({reason}). "
+            f"Run the job without the latent file to continue from the source video instead.")
+
+
+
 @workspace_storage.workspace_generation(headless=lambda state: workspace_storage.HeadlessWorkspaceHost(state, args.workspaces_dir or server_config.get('workspaces_dir') or os.path.join(wgp_root, 'workspaces'), lambda path: get_settings_from_file(state, path, False, False, False)[0], output_override=bool(args.output_dir)))
 @generation_downloads(get_gen_info, lambda: offloadobj)
 def generate_media(
@@ -8136,7 +8147,7 @@ def generate_media(
     # *From latent* prefix path reads fit_canvas; defining it later in the
     # function would leave it unbound at that point.
     fit_canvas, fit_crop = latent_jobs.compute_fit_canvas(model_def, server_config, outpainting_dims)
-    # Latent Branch (Phase 0 wiring): with the *From latent* checkbox this
+    # Latent Branch: with the *From latent* checkbox this
     # continuation job branches from the source video's saved *_latent.pt
     # sidecar: the branch point (the keep-frames field) resolves to a latent
     # boundary of the sidecar (the boundary before the latent containing the
@@ -8161,27 +8172,24 @@ def generate_media(
         overrun_note = f"; {branch['overrun']} frames past the video end come from the carried latents" if branch["overrun"] > 0 else ""
         if branch.get("mid_latent"):
             where = (f"you asked for frame {branch_latent_info['branch_frame']}, which falls inside the next latent block, so the cut lands "
-                     f"{int(branch_latent_info['branch_frame']) - int(branch['kept_frames'])} frames earlier, at frame {branch['kept_frames']} (window {branch['window_no']})")
-        elif branch.get("fit"):
-            if int(branch_latent_info["branch_frame"]) != int(branch["kept_frames"]):
-                where = f"the requested frame {branch_latent_info['branch_frame']} rounds up to frame {branch['kept_frames']} (window {branch['window_no']})"
-            else:
-                where = f"on a latent block boundary (window {branch['window_no']})"
+                     f"{int(branch_latent_info['branch_frame']) - int(branch['kept_frames'])} frames earlier, in window {branch['window_no']}")
+        elif branch.get("fit") and int(branch_latent_info["branch_frame"]) != int(branch["kept_frames"]):
+            where = f"the requested frame {branch_latent_info['branch_frame']} rounds up to it, in window {branch['window_no']}"
         else:
-            where = f"on a latent block boundary (window {branch['window_no']})"
-        print(f"From latent: branching from {os.path.basename(branch_latent_info['path'])}: cut at frame {branch['kept_frames']} of {branch['total_frames']} ({where}{overrun_note}).")
+            where = f"on a latent block boundary of window {branch['window_no']}"
+        print(f"From latent: branching from {os.path.basename(branch_latent_info['path'])}: cut at frame {branch['kept_frames']} of {branch['total_frames']}, {where}{overrun_note}.")
         # An all-latent-family job (LTX2 / Wan / LongCat / MiniMax H3)
         # that writes latents produces an all-latent sidecar: the kept
         # latents must be carried into it (a carried-window failure is
         # fatal — without them the file could not be self-contained),
         # and where the branch prefix itself is rejected the head window
         # falls back to a fresh encode over the kept region's fresh
-        # decode (Step 2) instead of the source video — the job is
+        # decode instead of the source video — the job is
         # refused only when that decode is impossible (Gate 1).
         _all_latent_job = latent_jobs._is_all_latent_family(latent_ctx, str(base_model_type or ""), model_def) and save_latents_enabled
-        # The kept windows/latents carry over into this job's sidecar
-        # (Phase 0) whatever the fit below decides; Phase 1 goes further
-        # and hands the kept latents to the model as a frozen prefix.
+        # The kept windows/latents carry over into this job's sidecar whatever
+        # the fit below decides; when the prefix is accepted the model is also
+        # handed the kept latents, frozen.
         try:
             branch_carried = latent_io.carry_over_latent_windows(branch_latent_info["sidecar_obj"], branch)
         except Exception as exc:
@@ -8210,7 +8218,7 @@ def generate_media(
                 _branch_vae_file, _branch_vae_sha = latent_jobs._h3_video_vae_identity(_job_model_def, base_model_type, vae_upsampling=new_model_vae_upsampling)
             elif latent_jobs._is_magi_human_family(base_model_type, model_def):
                 _branch_vae_file, _branch_vae_sha = latent_jobs._magi_video_vae_identity(_job_model_def, base_model_type)
-            # Step 2: the kept region is a fresh decode of the source
+            # The kept region is a fresh decode of the source
             # sidecar's kept windows, whenever the job's VAE can decode
             # them on the job's canvas (the fit check's VAE-identity and
             # latent-size tests): the output video's prefix, in place of a
@@ -8218,8 +8226,8 @@ def generate_media(
             # family.
             # The decision is independent of the branch prefix's own
             # acceptance (a rejected prefix still owns its kept region).
-            # The reason on the incompatible path names the setting at
-            # fault (the Gate 1 refusal message, below, is built from it).
+            # The kept region's pixels come from the latent file alone, so a file
+            # that cannot be decoded for this job stops the branch on the spot.
             branch_decode = None
             _branch_decode_reason = None
             try:
@@ -8227,6 +8235,7 @@ def generate_media(
                     branch_latent_info["entry"], branch)
                 if _kept_specs is None:
                     _branch_decode_reason = "the source latent file has no readable window for the branch point"
+                    raise gr.Error(_branch_decode_refusal(_branch_decode_reason))
                 else:
                     _decode_ok, _branch_decode_reason = latent_jobs._branch_kept_decode_compatible(
                         branch_latent_info["entry"], _kept_specs, base_model_type, model_def,
@@ -8236,10 +8245,16 @@ def generate_media(
                         branch_decode = (_kept_specs, _kept_frames, _kept_is_i2v)
                         print(f"From latent: the pre-cut part of the output video is rebuilt from the kept windows of the source latent file; the source video is not used for this run.")
                     else:
-                        print(f"From latent: the source latent file could not be decoded for this job ({_branch_decode_reason}); the run falls back to the classic continuation: the pre-cut part of the output video is copied from the source video, and the new branch is generated from the cut frame of the source video.")
+                        raise gr.Error(_branch_decode_refusal(_branch_decode_reason))
+            except gr.Error:
+                raise
             except Exception as exc:
                 _branch_decode_reason = str(exc)
-                print(f"From latent: the source latent file could not be decoded for this job ({exc}); the run falls back to the classic continuation: the pre-cut part of the output video is copied from the source video, and the new branch is generated from the cut frame of the source video.")
+                raise gr.Error(_branch_decode_refusal(_branch_decode_reason))
+            # The setting picks the head window's freeze shape (the pixel rule by default, the full
+            # freeze as the escape hatch); the family's declared capability decides whether it can.
+            _branch_head_mode = str(server_config.get("latent_branch_head_mode") or "pixel_rule")
+            _branch_reuse_frames = min(sliding_window_size - latent_size, int(sliding_window_overlap or 0)) if test_any_sliding_window(model_type) else 0
             try:
                 branch_prefix, prefix_error = latent_jobs._prepare_branch_prefix(
                     branch_latent_info["entry"], branch, branch_carried,
@@ -8251,19 +8266,14 @@ def generate_media(
                     vae_file=_branch_vae_file,
                     vae_sha256=_branch_vae_sha,
                     model_def=model_def,
+                    head_mode=_branch_head_mode,
+                    reuse_frames=_branch_reuse_frames,
                 )
             except Exception as exc:
                 if _all_latent_job and branch_decode is None:
-                    # The prefix preparation failed on a structural error
-                    # (not a clean fit rejection) and the kept region
-                    # cannot be decoded either: there is no self-contained
-                    # fallback left, so the job fails (Gate 1). With a
-                    # decodable kept region the head window simply uses a
-                    # fresh encode instead (Step 2) and the job proceeds.
-                    # Without a companion video the "run the job without
-                    # the latent file" option is not one (the pixel
-                    # fallback needs a video to re-encode from), so it is
-                    # dropped from the message.
+                    # The prefix plan failed on a structural error (not a clean fit
+                    # rejection) on a job that also cannot decode its kept region:
+                    # nothing self-contained is left to write, so the branch fails.
                     _option = ", or run the job without the latent file" if (branch_latent_info or {}).get("video_present", True) else ""
                     raise gr.Error(f"From latent: the branch prefix could not be prepared ({exc}) and the kept region cannot be decoded either; the branch is refused; change the setting{_option}.")
                 branch_prefix, prefix_error = None, str(exc)
@@ -8301,12 +8311,15 @@ def generate_media(
                 if _branch_audio_latents is None:
                     _branch_audio_note = ""
                 elif isinstance(_branch_audio_latents, dict):
-                    # Phase 3 (MiniMax H3): the splice carries the batched
-                    # frozen prefix and the flat condition rows.
-                    _branch_audio_note = f" (+ its audio prefix, {int(_branch_audio_latents['batched'].shape[3])} latent frames)"
+                    # MiniMax H3's splice carries the batched frozen prefix and
+                    # the flat condition rows.
+                    _branch_audio_note = f", plus its audio prefix of {int(_branch_audio_latents['batched'].shape[3])} latent frames"
                 else:
-                    _branch_audio_note = f" (+ its audio prefix, {int(_branch_audio_latents.shape[2])} latent frames)"
-                print(f"From latent: the pre-cut latents ({int(branch_prefix['prefix_latents'].shape[1])} latents, {branch_prefix['assembly_overlap']} decoded frames){_branch_audio_note} are copied unchanged from the source latent file; the new branch is generated after the cut.")
+                    _branch_audio_note = f", plus its audio prefix of {int(_branch_audio_latents.shape[2])} latent frames"
+                if branch_prefix.get("head_mode") != "pixel_rule":
+                    # The full freeze copies the whole kept run into the head window; the rule prints nothing
+                    # here, and only a failure to produce the decode is worth reporting.
+                    print(f"From latent: the pre-cut latents ({int(branch_prefix['prefix_latents'].shape[1])} latents, {branch_prefix['assembly_overlap']} decoded frames{_branch_audio_note}) are copied unchanged from the source latent file; the new branch is generated after the cut.")
             else:
                 # prefix_error is empty when the rejection above already
                 # announced itself (e.g. the two-phase tiling blocker); only
@@ -8531,10 +8544,8 @@ def generate_media(
     default_windows = [dict(window) for window in default_windows_template]
     if not scheduler_active:
         sliding_window = len(default_windows) > 1 or default_windows[0]["overlap_frames"] > 0
-    # Latent Branch (Phase 1): determinism + head-window plan (moved to
-    # latent_jobs.plan_branch_head_window, the latent refactor phase 4):
-    # the seed/prompt prefill from the sidecar, the Case A/B head-window
-    # reshaping, the Gate-1 refusal and the one-line plan receipt.
+    # The latent branch's plan: the seed and prompt prefill from the companion file, the
+    # head-window reshaping, the fit refusal and the one-line plan receipt.
     _plan = latent_jobs.plan_branch_head_window(latent_ctx,
         branch_latent_info=branch_latent_info,
         branch_prefix=branch_prefix,
@@ -8634,35 +8645,29 @@ def generate_media(
         # The branch job's sidecar starts from the source sidecar's kept
         # windows (they are part of the final video, verbatim); the job's
         # own windows follow (the branch window is the sidecar's window K,
-        # not a new window 1). With a rejected prefix (Step 2, case 2) the
+        # not a new window 1). With a rejected prefix the
         # containing window's kept portion is not part of any generated
         # window, so the cut window block — the window's full latents with
         # the committed range trimmed to end at the cut — carries it into
         # the sidecar as a stand-alone window (the file stays
         # self-contained: its decode is the kept region's fresh decode).
         latent_windows = [dict(_block) for _block in (branch_carried["video_windows"] if branch_carried is not None else [])]
-        # Phase 3 (MiniMax H3): when the branch prefix is accepted, the
-        # containing window's cut block (the kept latents with the decoded
-        # run capped at the cut - the full window itself for a window-end
-        # cut) rides into the sidecar as its own stand-alone block, which
-        # the sidecar writer inserts ahead of the head window: the kept
-        # region commits from its own fresh decode, and the head window's
-        # recorded bookkeeping describes the seam the written video actually
-        # carries (a frozen head drops the kept latents' decoded length from
-        # its own decoded output; a head window the pipeline rejected at its
-        # grid check is replaced by the containing window, its fresh
-        # decoded region not being part of the written video).
-        _h3_cut_video_block = _h3_cut_audio_block = None
-        if (latent_jobs._is_h3_family(str(base_model_type or ""), model_def)
-                and branch_prefix is not None and branch_carried is not None and branch_latent_info is not None):
+        # The accepted branch's cut block: the containing window capped at the cut, with its
+        # audio companion, inserted ahead of the head window as a stand-alone block. The kept
+        # region then commits from its own block, which is what a frozen head, a head window the
+        # grid check rejected, and the pixel rule each need.
+        _branch_cut_video_block = _branch_cut_audio_block = None
+        if (branch_prefix is not None and branch_carried is not None and branch_latent_info is not None
+                and (latent_jobs._is_h3_family(str(base_model_type or ""), model_def)
+                     or branch_prefix.get("head_mode") == "pixel_rule")):
             try:
-                _h3_cut_video_block = latent_io.branch_cut_window_block(branch_latent_info["sidecar_obj"], branch_latent_info["branch"])
+                _branch_cut_video_block = latent_io.branch_cut_window_block(branch_latent_info["sidecar_obj"], branch_latent_info["branch"])
             except Exception:
-                _h3_cut_video_block = None
+                _branch_cut_video_block = None
             try:
-                _h3_cut_audio_block = latent_io.branch_cut_audio_window_block(branch_latent_info["sidecar_obj"], branch_latent_info["branch"])
+                _branch_cut_audio_block = latent_io.branch_cut_audio_window_block(branch_latent_info["sidecar_obj"], branch_latent_info["branch"])
             except Exception:
-                _h3_cut_audio_block = None
+                _branch_cut_audio_block = None
         _cut_audio_block = None
         if branch_carried is not None and branch_prefix is None and branch_decode is not None:
             try:
@@ -8696,7 +8701,7 @@ def generate_media(
                 _carried_audio = branch_carried.get("audio_windows") or []
                 _audio_latents = [_block["latents"] for _block in _carried_audio]
                 _audio_metas = [{key: _block.get(key) for key in ("window_no", "start_sample", "samples") if key in _block} for _block in _carried_audio]
-                _cut_audio = _cut_audio_block if _cut_audio_block is not None else _h3_cut_audio_block
+                _cut_audio = _cut_audio_block if _cut_audio_block is not None else _branch_cut_audio_block
                 if _cut_audio is not None:
                     _audio_latents.append(_cut_audio["latents"])
                     _audio_metas.append({key: _cut_audio[key] for key in ("start_sample", "samples")})
@@ -8729,9 +8734,9 @@ def generate_media(
                         )[latent_io.LATENT_FORMAT_ID_AUDIO])
                     except Exception as exc:
                         print(f"Latent save: the carried audio windows could not be re-stacked ({exc}); the audio of the latent file starts at the branch window.")
-        # The per-window latent sidecar writer (the latent refactor
-        # phase 4): the branch state and the model identity are fixed
-        # here, the per-window values ride in with each window.
+        # The per-window latent sidecar writer (latent_jobs.LatentWindowRecorder):
+        # the branch state and the model identity are fixed here, the per-window
+        # values ride in with each window.
         latent_recorder = latent_jobs.LatentWindowRecorder(latent_ctx,
             branch_prefix=branch_prefix,
             branch_decode=branch_decode,
@@ -8740,8 +8745,8 @@ def generate_media(
             model_type=model_type,
             base_model_type=base_model_type,
             fake_start_image=fake_start_image,
-            branch_cut_video_block=_h3_cut_video_block,
-            branch_cut_audio_block=_h3_cut_audio_block)
+            branch_cut_video_block=_branch_cut_video_block,
+            branch_cut_audio_block=_branch_cut_audio_block)
         latent_prefix_meta = {}
         pre_video_guide_is_hdr = False
         context_scale = None
@@ -8904,14 +8909,9 @@ def generate_media(
             _h3_branch_src_indep = (window_no == 1 and branch_prefix is not None
                                     and latent_jobs._is_h3_family(str(base_model_type or ""), model_def))
             if _h3_branch_src_indep:
-                # H3 branch (D3): the kept region is a fresh decode of the
-                # source sidecar's kept windows (the pipeline returns it as
-                # decoded_prefix for this window), so the source video is not
-                # re-extracted (the input video is optional for an H3 branch).
-                # The assembly bookkeeping comes from the plan; prefix_video is
-                # set once the pipeline returns the decoded prefix (below), and
-                # the model's own conditioning comes from the sidecar latents,
-                # not from any guide pixels.
+                # MiniMax H3 branch: the kept region is the pipeline's own decode of the
+                # sidecar's kept windows, so the source video is never re-extracted; the
+                # assembly bookkeeping comes from the plan, the conditioning from its latents.
                 source_video_overlap_frames_count = max(1, int(branch_prefix["assembly_overlap"]))
                 source_video_frames_count = int(branch_prefix["kept_frames"])
                 window_prefix_is_image = False
@@ -8924,19 +8924,19 @@ def generate_media(
                     if int(_kept_entry.get("height") or 0) > 0 and int(_kept_entry.get("width") or 0) > 0:
                         image_size = (int(_kept_entry.get("height")), int(_kept_entry.get("width")))
                     sample_fit_canvas = None
-            elif (window_no == 1 and image_start is None
-                    and len(str(video_source or "").strip()) == 0
-                    and (branch_prefix is not None or branch_decode is not None)):
-                # A branch without a companion video (any latent-writing
-                # family): the same source-independent bookkeeping as the
-                # H3 block - the prefix is the decoded kept region (the
-                # pipeline returns it as decoded_prefix for this window,
-                # below) and there is no video whose pixels the assembly
-                # could re-extract, so the window's leading overlap is the
-                # decoded prefix's length: the accepted prefix's frozen
-                # latents, or the classic one-frame conditioning overlap
-                # for a rejected prefix's fresh-encode head (the
-                # with-video case does the same through the pixel path).
+            elif window_no == 1 and image_start is None and (
+                    # The pixel rule takes no pixels from the companion: the head and the
+                    # kept prefix are slices of one decode of the latent file. An HDR
+                    # output keeps the pixel path.
+                    (branch_prefix is not None
+                     and str(branch_prefix.get("head_mode") or "") == "pixel_rule"
+                     and "&" not in video_prompt_type)
+                    # No companion video at all: the same bookkeeping from the file's records.
+                    or (len(str(video_source or "").strip()) == 0
+                        and (branch_prefix is not None or branch_decode is not None))):
+                # The branch's own bookkeeping: the output's prefix is the decoded kept
+                # region this window returns, so the leading overlap is that decode's
+                # length - the accepted prefix's head, or one frame when it was rejected.
                 _nov_kept = int(branch_latent_info["branch"]["kept_frames"])
                 source_video_overlap_frames_count = (max(1, int(branch_prefix["assembly_overlap"]))
                                                      if branch_prefix is not None else 1)
@@ -8975,18 +8975,9 @@ def generate_media(
                 source_video_overlap_frames_count = source_overlap if video_source is not None else pre_video_guide.shape[1]
                 source_video_frames_count = prefix_video.shape[1]
                 if branch_prefix is not None and window_no == 1 and video_source is not None and prefix_video is not None:
-                    # The head window's frozen prefix: the sample's leading
-                    # frames decode the sidecar's kept latents (not the
-                    # re-encoded guide tail), so the assembly trims that
-                    # decoded length and the model is handed the exact
-                    # sidecar values instead of the guide pixels. The guide
-                    # pixels span the whole frozen run (case B decodes more
-                    # than the trim) so the model's conditioning mask covers
-                    # it exactly like a standard i2v head. The value stays
-                    # on the sidecar's own grid (MiniMax H3: 17k + 5, not
-                    # the model's normalized 17k + 1 overlap) and passes
-                    # through un-normalized; each family's model side
-                    # applies its own grid rules to it.
+                    # The sample's leading frames decode the kept latents here, so the assembly
+                    # trims that decoded length and the guide spans it like a standard i2v head.
+                    # The value stays on the file's own grid and passes through un-normalized.
                     source_video_overlap_frames_count = max(1, int(branch_prefix["assembly_overlap"]))
                     _branch_guide_len = max(source_video_overlap_frames_count, int(branch_prefix["guide_frames"]))
                     if prefix_video.shape[1] >= _branch_guide_len:
@@ -9401,40 +9392,30 @@ def generate_media(
                     if save_latents_enabled:
                         latent_gen_kwargs["save_latents"] = True
                 if branch_prefix is not None and window_no == 1:
-                    # Phase 1: the head window takes the sidecar's kept
-                    # latents verbatim as its frozen prefix (the model
-                    # re-freezes them at every denoise step); the tail is
-                    # the only part that gets re-denoised.
+                    # The kept section travels as latents because that is what the file
+                    # holds; branch_head_mode says whether the plan built the pixel rule's
+                    # head or froze these latents themselves.
                     latent_gen_kwargs["prefix_latents"] = branch_prefix["prefix_latents"]
+                    latent_gen_kwargs["branch_head_mode"] = branch_prefix["head_mode"]
                     if branch_prefix.get("prefix_audio_latents") is not None:
-                        # Phase 2 (LTX2): the head window's audio prefix is
-                        # the sidecar's kept audio latents (sliced by time
-                        # ratio), so the model skips the waveform re-encode.
+                        # The frozen audio is the file's own audio latents sliced to the
+                        # span the model freezes, so the waveform re-encode is skipped.
                         latent_gen_kwargs["prefix_audio_latents"] = branch_prefix["prefix_audio_latents"]
-                # The LTX2 head window's own decode already contains the
-                # kept region whenever that region is exactly the window's
-                # frozen head (no carried window in front of it, no image
-                # frame outside the assembly overlap). A second decode of
-                # the same latents is then both redundant and harmful: the
-                # VAE decode is stochastic and temporally tiled, so it
-                # differs from the window's decode, and splicing it in is
-                # what leaves the seam at the cut. Every other shape (K >
-                # 1, an i2v-derived source, a rejected prefix, the
-                # deterministic families) keeps the fresh decode, as does
-                # HDR output: the join's HDR path re-maps the prefix's
-                # range in place, which a slice of the sample must never
-                # pass through (the job-level flag is the same test the
-                # model applies to decide its own HDR output).
-                _branch_head_covers_kept = (
+                # Structural means the window's frozen head already is the kept region, so the assembly
+                # takes it from that window's own decode: a second decode of the same latents differs (the
+                # VAE is stochastic and temporally tiled) and would leave a seam at the cut.
+                _branch_head_structural = (
                     branch_prefix is not None and window_no == 1
-                    and latent_jobs._is_ltx2_family(str(base_model_type or ""), model_def)
+                    and latent_jobs.branch_head_takes_rule(
+                        str(base_model_type or ""), model_def)
                     and int(branch_prefix.get("kept_frames") or 0) > 0
                     and int(branch_prefix.get("kept_frames") or 0)
                         == int(source_video_overlap_frames_count)
                     and "&" not in video_prompt_type)
+                _branch_head_covers_kept = _branch_head_structural
                 if branch_decode is not None and window_no == 1 and not _branch_head_covers_kept:
-                    # Step 2: the kept region is a fresh decode of the
-                    # source sidecar's kept windows (the pipeline returns
+                    # The kept region is a fresh decode of the source
+                    # sidecar's kept windows (the pipeline returns
                     # it as decoded_prefix; the job uses it as the output
                     # video's prefix). Independent of the branch prefix
                     # acceptance above: a rejected prefix still decodes.
@@ -9533,7 +9514,7 @@ def generate_media(
                     overlapped_latents = overlapped_latents,
                     return_latent_slice= return_latent_slice,
                     overlap_noise = sliding_window_overlap_noise,
-                    overlap_size = reuse_frames,
+                    overlap_size = reuse_frames if window_no > 1 else source_video_overlap_frames_count,
                     sub_parallel_window_size=sub_parallel_window_size,
                     sub_parallel_window_overlap=sub_parallel_window_overlap,
                     color_correction_strength = sliding_window_color_correction_strength,
@@ -9671,8 +9652,8 @@ def generate_media(
                         elif input_fills_window:
                             output_new_audio_filepath = None
                     post_decode_pre_trim = samples.get("post_decode_pre_trim", 0) 
-                    # Step 2: the branch job's kept region (a fresh decode of
-                    # the source sidecar's kept windows — the same
+                    # The branch job's kept region (a fresh decode of the
+                    # source sidecar's kept windows — the same
                     # reconstruction the Latent Decode job performs) is
                     # returned by the pipeline so the job uses it as the
                     # output video's prefix (source independence).
@@ -9701,8 +9682,8 @@ def generate_media(
             else:
                 sample = samples
                 samples = None
-                # Step 2: use the decoded prefix (a fresh decode of the
-                # source sidecar's kept windows — the same reconstruction
+                # Use the decoded prefix (a fresh decode of the source
+                # sidecar's kept windows — the same reconstruction
                 # the Latent Decode job performs) as the output video's
                 # prefix (source independence) instead of the re-extracted
                 # source segment, for every latent-writing family (a blocked
@@ -9711,19 +9692,10 @@ def generate_media(
                     prefix_video = branch_decoded_prefix
                 elif (_branch_head_covers_kept and sample is not None
                         and 0 < int(source_video_overlap_frames_count) < int(sample.shape[1])):
-                    # The window's head *is* the kept region: the
-                    # conditioning replaced the window's first latents with
-                    # the sidecar's kept latents and the zero denoise mask
-                    # kept them clean at every step of both stages, so the
-                    # window's own decode of them is the pixel-exact kept
-                    # run (a separate decode of the same latents is not:
-                    # fresh noise draws, a different temporal tile split).
-                    # Taking the head from `sample` leaves the join block
-                    # below running unchanged - guide_start_frame, the audio
-                    # trims and the recorded head trims all stay as they
-                    # are. (`sample`'s head slice, so the join's HDR range
-                    # remap must not see it: the predicate above excludes
-                    # HDR output.)
+                    # The kept region is this window's own head - the conditioning held it clean through both
+                    # stages - so this window's decode of it is the closest reading there is; a separate decode
+                    # of the same latents differs. It is a slice of the window's output, so the HDR case, which
+                    # remaps ranges in place, is excluded by the predicate above.
                     prefix_video = sample[:, :int(source_video_overlap_frames_count)]
                 stop_current_sample = stop_sample_scheduled or (not (is_image or audio_only) and sample.shape[1] < current_video_length)
                 # if True: # for testing
@@ -9785,6 +9757,9 @@ def generate_media(
                     audio_repair_samples = round(window_audio_repair_seconds * output_audio_sampling_rate)
                     if video_source is not None and window_no == 1:
                         source_audio_repair_seconds = audio_repair_samples / output_audio_sampling_rate
+                # Frames the kept region contributes to the spliced window (0 outside a branch head): the
+                # audio check below measures the window's own contribution, not the kept region's length.
+                _spliced_prefix_frames = 0
                 if prefix_video != None and window_no == 1 :
                     if sample_is_hdr:
                         prefix_was_uint8 = prefix_video.dtype == torch.uint8
@@ -9804,6 +9779,7 @@ def generate_media(
                             prefix_video = resize_lanczos_spatial(prefix_video, None, size=sample.shape[-2:])
                         # remove sliding window overlapped frames at the beginning of the generation
                         sample = torch.cat([ prefix_video, sample[: , source_video_overlap_frames_count:]], dim = 1)
+                        _spliced_prefix_frames = int(prefix_video.shape[1])
                     else:
                         # remove source video overlapped frames at the beginning of the generation if there is only a start frame
                         if (window_prefix_is_image and not fake_start_image
@@ -9828,6 +9804,22 @@ def generate_media(
                             generated_audio = generated_audio[trim_samples:]
                         else:
                             generated_audio = truncate_audio( generated_audio, 0 if video_source is None else source_video_overlap_frames_count, 0, fps, output_audio_sampling_rate,)
+                        if branch_prefix is not None and not drop_generated_audio and output_audio_sampling_rate and fps:
+                            # A latent branch has no source video to lean on, so its kept soundtrack and the generated
+                            # one must meet where the picture meets. Measure the window against the junction the join
+                            # really makes - its committed frames plus the repair margin the seam spends - and tolerate
+                            # two frames, which is the audio grid's own granularity; a slipped overlap is far past it.
+                            _audio_frames = generated_audio.shape[0] * fps / output_audio_sampling_rate
+                            # The head window's own committed frames: the kept region spliced ahead of it carries the
+                            # source's soundtrack, so it is not part of the junction measured here.
+                            _video_frames = int(sample.shape[1]) - _spliced_prefix_frames
+                            _repair_frames = audio_repair_samples * fps / output_audio_sampling_rate
+                            _junction_frames = _video_frames + _repair_frames
+                            if abs(_audio_frames - _junction_frames) > 2.0:
+                                print(f"Audio join: the branch head window's soundtrack is {(_audio_frames - _junction_frames) / fps * 1000:+.0f} ms off the picture junction "
+                                      f"({_audio_frames:.1f} frames against {_junction_frames:.1f} = {_video_frames} committed frames + the {_repair_frames * 1000 / fps:.0f} ms repair margin): "
+                                      f"audio overlap {audio_overlap_frames} frames, picture trim {int(source_video_overlap_frames_count)} frames, "
+                                      f"{int(branch_prefix['kept_frames'])} kept frames, head mode {branch_prefix.get('head_mode')}.")
                 elif sliding_window and window_no > 1 and reuse_frames > 0:
                     # remove sliding window overlapped frames at the beginning of the generation
                     sample = sample[: , reuse_frames:]
@@ -10171,13 +10163,9 @@ def generate_media(
                 keep_intermediate_windows = server_config.get("keep_intermediate_sliding_windows", 1)
                 record_file_metadata(video_path, configs, is_image, audio_only and video_file is None, gen, embedded_images=embedded_images, replace_last_file=sliding_window and window_no > 1 and not keep_intermediate_windows, notify_generation=not sliding_window or keep_intermediate_windows or window_no == total_windows, output_role="intermediate" if sliding_window and window_no < total_windows else "final")
                 media_path = video_path[0] if isinstance(video_path, list) else video_path
-                # The latent companion file (moved to
-                # latent_jobs.LatentWindowRecorder, the latent refactor
-                # phase 4): the all-latent sidecar is rebuilt from the
-                # accumulated window blocks after every window and written
-                # next to the media (it is the handoff for Latent Decode);
-                # it is never echoed in API responses, so it is kept out of
-                # the side-files dict.
+                # The latent companion file (latent_jobs.LatentWindowRecorder) is rebuilt from the window
+                # blocks after every window and written beside the media for Latent Decode; API responses
+                # never carry it, so it stays out of the side-files dict.
                 latent_recorder.on_window(latent_file_obj, side_files, media_path, window_no,
                     sliding_window=sliding_window,
                     latent_windows=latent_windows,

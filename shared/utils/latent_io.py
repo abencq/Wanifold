@@ -362,11 +362,10 @@ def build_latent_sidecar(
             "tail_trim": tail_trim,
             "frame_count": frame_count,
         }
-        # Family-specific per-window metadata (MiniMax H3's piecewise
-        # bookkeeping) travels with the window block so the decode job
-        # can re-derive the decoded length without the original job's
-        # model definition.
-        for key in ("h3_history_frames", "h3_target_frames", "h3_anchor_head"):
+        # Family-specific per-window fields (MiniMax H3's piecewise bookkeeping, LTX2's
+        # head record) travel with the block, so a branch needs no model definition.
+        for key in ("h3_history_frames", "h3_target_frames", "h3_anchor_head",
+                    "branch_head_mode", "overlap_latents", "overlap_decoded"):
             if key in meta:
                 entry_window[key] = meta[key]
         entry_window["latent_start"] = offset
@@ -597,9 +596,11 @@ def entry_i2v_image(entry) -> dict | None:
     return None
 
 
-# Family-specific per-window fields carried on entries and window blocks
-# (see the module docstring for the MiniMax H3 rationale).
-_WINDOW_EXTRA_FIELDS = ("frame_count", "h3_history_frames", "h3_target_frames", "h3_anchor_head")
+# Family-specific per-window fields carried on entries and window blocks. The counts
+# are ints; an absent ``branch_head_mode`` reads as the full freeze.
+_WINDOW_EXTRA_FIELDS = ("frame_count", "h3_history_frames", "h3_target_frames", "h3_anchor_head",
+                        "overlap_latents", "overlap_decoded")
+_WINDOW_EXTRA_TEXT_FIELDS = ("branch_head_mode",)
 
 
 def _copy_window_extra_fields(spec: dict, source: dict) -> None:
@@ -607,6 +608,10 @@ def _copy_window_extra_fields(spec: dict, source: dict) -> None:
         value = source.get(key)
         if value is not None:
             spec[key] = int(value)
+    for key in _WINDOW_EXTRA_TEXT_FIELDS:
+        value = source.get(key)
+        if value is not None and str(value) != "":
+            spec[key] = str(value)
 
 
 def entry_window_specs(entry: dict) -> list[dict]:
@@ -618,7 +623,8 @@ def entry_window_specs(entry: dict) -> list[dict]:
     (``[c, t, h, w]``, CPU float16), plus ``frame_count`` (the window's
     output frame count) and any family-specific fields recorded on the
     window block (``h3_history_frames`` / ``h3_target_frames`` for
-    MiniMax H3).
+    MiniMax H3, ``branch_head_mode`` / ``overlap_latents`` /
+    ``overlap_decoded`` for the head window of a pixel-rule branch).
 
     Every file the app reads is all-latent (one block per window), so
     this is a straight walk over the ``windows`` list; a file in any
@@ -864,7 +870,7 @@ def h3_head_trim_on_decoded_run(spec: dict) -> int:
 
 
 # =============================================================================
-# Latent branching (Phase 0): branch-point clamping + sidecar carry-over
+# Latent branching: branch-point clamping + sidecar carry-over
 # =============================================================================
 
 def _window_decoded_frames(entry: dict, spec: dict) -> int:
@@ -1283,7 +1289,7 @@ def carry_over_latent_windows(sidecar_obj: dict, branch_point: dict) -> dict:
         # destination's latents are attached below).
         windows = video_entry.get("windows") or []
         block = dict(windows[index]) if index < len(windows) else {}
-        for key in _WINDOW_EXTRA_FIELDS:
+        for key in _WINDOW_EXTRA_FIELDS + _WINDOW_EXTRA_TEXT_FIELDS:
             if key not in block and key in spec:
                 block[key] = spec[key]
         block["latents"] = spec["latents"]
@@ -1463,9 +1469,7 @@ def branch_cut_audio_window_block(sidecar_obj, branch_point):
         return None
     block = slice_info["block"]
     samples = int(block.get("samples") or 0)
-    t_k = slice_info["t_k"]
-    count = slice_info["count"]
-    slice_samples = int(round(samples * count / t_k)) if t_k > 0 else 0
+    slice_samples = slice_info["samples"]
     start_sample = int(block.get("start_sample") or 0)
     if slice_info["tail"]:
         # The slice is the block's committed tail: its start is where that
@@ -1478,56 +1482,69 @@ def branch_cut_audio_window_block(sidecar_obj, branch_point):
     }
 
 
-def branch_head_window(entry: dict, branch_point: dict, requested_new_frames: int, *, stride: int = 0, offset: int = 0) -> dict:
+def tail_latents_for_overlap(overlap_frames, stride: int = 0, offset: int = 0):
+    """The smallest tail of latents that decodes at least ``overlap_frames`` (N), and
+    that tail's decoded length (O) - the pixel rule's frozen head and its bridge.
+
+    N is the smallest latent count whose decoded run reaches the requested overlap, so
+    O can overshoot it by up to ``stride - 1`` frames; a non-causal layout
+    (``offset <= 0``) gives O = stride * N. Unset ``stride`` / ``offset`` assume the Wan
+    layout, as :func:`window_pixel_frames` does. Returns the pair ``(n, o)``.
+    """
+    r = max(1, int(overlap_frames or 0))
+    stride = int(stride or 0)
+    offset = int(offset or 0)
+    if stride <= 0:
+        stride, offset = 4, 1
+    if offset <= 0:
+        n = (r + stride - 1) // stride
+        return n, stride * n
+    n = 1 + (r - 1 + stride - 1) // stride
+    return n, offset + stride * (n - 1)
+
+
+def branch_head_window(entry: dict, branch_point: dict, requested_new_frames: int, *, stride: int = 0, offset: int = 0,
+                       head_mode: str = "full_freeze", overlap_frames: int | None = None) -> dict:
     """The branch-shaped head window for a sidecar's containing window.
 
-    A branch job's head window is the containing window ``K`` of the
-    resolved branch point, regenerated from the cut: its denoised tensor
-    is ``[the kept latents of K (verbatim from the sidecar) | new
-    latents]``. With the cut inside ``K`` (the mid-latent default, or the
-    rounded resolution clamping to a boundary strictly inside ``K``) the
-    new latents complete ``K`` up to its committed end, so the window's
-    geometry (decoded length, committed range) matches ``K``'s own; with
-    the cut at ``K``'s committed end the head window's new portion is a
-    fresh standard window (the caller supplies its geometry) and the
-    prefix is ``K``'s full latent run.
+    The head window is the branch point's containing window K, regenerated from the cut:
+    its tensor is [the kept latents of K | new latents]. A cut inside K lets the new
+    latents complete K up to its committed end, so the window keeps K's own geometry; a
+    cut at K's committed end takes K's whole run as the prefix and starts a fresh window
+    whose length is the frozen head plus the request rounded up to the latent grid.
+    Linear layouts shrink that window to fit a short request; MiniMax H3 keeps K's layout
+    because its transformer needs the clip K was generated with, and absorbs the
+    overshoot into ``tail_trim_new``.
 
-    ``requested_new_frames`` is the new segment the user asked for (the
-    job's video length, which excludes the verbatim kept prefix).
+    ``head_mode`` picks the freeze shape. "full_freeze" freezes the kept latents' whole
+    run at the head; "pixel_rule" (linear layouts only) freezes only the tail N latents
+    whose decoded length O reaches ``overlap_frames``
+    (:func:`tail_latents_for_overlap`), and O becomes the assembly overlap, the guide and
+    the head trim. "pixel_rule" adds ``head_mode``, ``prefix_source``,
+    ``head_prefix_latents``, ``overlap_latents``, ``overlap_decoded``,
+    ``assembly_overlap``, ``guide_frames``, ``new_latents`` and ``shared_cut_frame`` (1
+    when the window gives up the frame the cut stands on) to the keys the full freeze
+    returns.
 
-    For linear layouts (Wan/LongCat 4/1, LTX2 8/1) the head window
-    shrinks to fit a short request: its ``frame_num`` is the decoded
-    prefix plus the request rounded up to the VAE's latent multiple.
-    MiniMax H3 keeps ``K``'s own geometry instead — the clip-anchored
-    transformer needs the identical clip layout ``K`` was generated with,
-    and a window never falls below the H3 minimum of 124 frames:
-    ``frame_num`` is ``K``'s recorded ``frame_count`` (on the 5+17k grid),
-    the new latents run to ``K``'s last latent, the committed new portion
-    is the request clamped to the cut's committed tail, and the overshoot
-    is absorbed as ``tail_trim_new`` (which also re-applies ``K``'s own
-    tail trim, the new block decoding at ``K``'s capped length).
-
-    Returns a dict with ``prefix_latents`` (the kept latents' count in
-    window ``K``, always a self-contained first ``P`` latents run so the
-    new sidecar decodes cleanly), ``decoded_prefix`` (the pixel frames
-    those latents decode to, the head trim of the branch job's window 1),
-    the containing window's full ``latent_count``/``decoded_window``/
-    ``start_frame``/``head_trim``/``tail_trim`` metadata, ``first_new_frame``
-    (the 0-based index of the first regenerated frame), ``natural_new``
-    (the new frames from the cut to ``K``'s committed end), ``committed_start``
-    / ``committed_end`` (the containing window's committed range in the final
-    video, as 0-based committed-frame counts, the end exclusive) and, when the
-    cut is inside ``K``, ``frame_num``/``new_frames``/``tail_trim_new`` for the
-    head window (the requested length rounded up to the VAE's latent
-    multiple, the overshoot absorbed as a tail trim so the output ends
-    exactly at the requested boundary).
+    Returns ``prefix_latents``, ``decoded_prefix``, K's ``latent_count``,
+    ``decoded_window``, ``start_frame``, ``head_trim`` and ``tail_trim``,
+    ``first_new_frame``, ``natural_new``, ``committed_start`` / ``committed_end`` (end
+    exclusive) and, when the window carries new latents, ``frame_num``, ``new_frames``
+    and ``tail_trim_new``.
     """
     if not isinstance(branch_point, dict):
         raise ValueError("branch_point must be the dict returned by branch_point_for_frame")
+    if head_mode not in ("full_freeze", "pixel_rule"):
+        raise ValueError(f"unknown branch head mode {head_mode!r} (the plan takes 'full_freeze' or 'pixel_rule')")
+    pixel_rule = head_mode == "pixel_rule"
     specs = entry_window_specs(entry)
     k = branch_window_position(entry, branch_point, specs)
     spec = specs[k - 1]
     is_h3 = _is_h3_spec(spec)
+    if pixel_rule and is_h3:
+        # The H3 piecewise layout cannot express the tail's decoded length on a linear
+        # grid; H3 plans through h3_branch_head_plan and never asks for the pixel rule.
+        raise ValueError("the pixel rule is not supported for the MiniMax H3 piecewise layout (the H3 branch plan keeps its committed-totals arithmetic)")
     stride = int(stride or entry.get("latent_stride") or 0)
     offset = int(offset or entry.get("frame_offset") or 0)
     if stride <= 0:
@@ -1551,29 +1568,52 @@ def branch_head_window(entry: dict, branch_point: dict, requested_new_frames: in
     committed_start = int(_window_committed_offsets(entry)[k - 1])
     committed_end = committed_start + _window_committed_frames(entry, spec)
     natural_new = max(0, committed_end - kept_frames)
+    # Decided before the pixel rule resizes the new region below: at the window's committed
+    # end the head window is fresh, inside it the new latents complete the window.
+    cut_at_window_end = natural_new == 0
+    # One frame of the request belongs to the cut itself; only the fresh
+    # window-end window can spend it (see the branch below).
+    shared_cut_frame = 0
+    if pixel_rule:
+        # The rule sizes the new region after the re-denoised overlap O, not after the whole
+        # kept run; the request still clamps to the cut's committed tail, and O to what the
+        # kept run decodes to.
+        _n_raw, _o_raw = tail_latents_for_overlap(overlap_frames, stride, offset)
+        o = min(_o_raw, kept_frames)
+        if cut_at_window_end:
+            # A fresh window whose new portion is the request, so the mid-cut's clamp on the
+            # committed tail does not apply. One frame of the request is the frame the cut
+            # stands on, which the classic continuation from a video file spends: the branch
+            # gives up the window's last frame to reach that same length.
+            shared_cut_frame = 1 if int(requested_new_frames or 0) > 1 else 0
+            natural_new = max(int(requested_new_frames or 0) - shared_cut_frame, o)
+        else:
+            # A cut inside the window spends no frame: its new latents complete the
+            # containing window up to that window's own committed end.
+            natural_new = max(0, committed_end - o)
     if natural_new > 0:
         # The cut falls inside the window's committed range: the new
         # latents complete the window (the decoded length is the window's
         # own, so the new sidecar's block stays a self-contained unit).
         prefix_count = prefix_latents
-        target = max(1, min(natural_new, int(requested_new_frames or 0)))
+        target = max(1, min(natural_new, int(requested_new_frames or 0) - shared_cut_frame))
         if is_h3:
             decoded_prefix = h3_video_latent_pixel_frames(prefix_count)
-            # The generated window keeps K's own geometry: its frame count
-            # is K's recorded one (on the 5+17k grid, at least the H3
-            # minimum window of 124 frames), never shrunk to fit a short
-            # request the way the linear layouts do. The new latents
-            # complete K up to its last latent; the committed new portion
-            # is the request clamped to the cut's committed tail, the
-            # overshoot (including K's own tail share, the block decoding
-            # at K's capped length) absorbed as the new block's tail trim.
+            # The window keeps K's own geometry (its recorded frame count, never shrunk to
+            # fit a short request the way the linear layouts are); the new latents complete
+            # K, and the overshoot lands on the new block's tail trim.
             frame_num = int(spec.get("frame_count") or 0) or h3_video_latent_pixel_frames(full_latents)
             new_latents = full_latents - prefix_count
             tail = max(0, int(decoded_window) - decoded_prefix - target)
         else:
             decoded_prefix = window_pixel_frames(spec["latents"][:, :prefix_count], stride, offset)
             new_latents = (target + stride - 1) // stride
-            frame_num = decoded_prefix + stride * new_latents
+            if pixel_rule:
+                # The head window is [frozen tail N | new latents]: its decoded length is the
+                # re-denoised overlap O plus the new latents, not the kept run's decoded length.
+                frame_num = o + stride * new_latents
+            else:
+                frame_num = decoded_prefix + stride * new_latents
             tail = stride * new_latents - target
     else:
         # The cut is the window's committed end: the whole window is kept
@@ -1585,7 +1625,7 @@ def branch_head_window(entry: dict, branch_point: dict, requested_new_frames: in
         new_latents = 0
         frame_num = 0
         tail = 0
-    return {
+    plan = {
         "window_no": k,
         "prefix_latents": prefix_count,
         "latent_count": full_latents,
@@ -1596,19 +1636,35 @@ def branch_head_window(entry: dict, branch_point: dict, requested_new_frames: in
         "tail_trim": tail_trim,
         "first_new_frame": kept_frames,
         "natural_new": int(natural_new),
-        "cut_at_window_end": natural_new == 0,
+        "cut_at_window_end": bool(cut_at_window_end),
         "requested_new_frames": int(requested_new_frames or 0),
         "new_frames": int(target),
         "frame_num": int(frame_num),
         "tail_trim_new": int(tail),
-        # The containing window's committed range in the final video (the
-        # 0-based committed-frame counts; the end is exclusive): the branch
-        # job's sidecar writer records a pure-new (anchor-head) branch
-        # window against this range instead of the window's recorded
-        # start/trims.
+        # The containing window's committed range in the final video, end exclusive: a
+        # pure-new branch window is recorded against this range, not against recorded trims.
         "committed_start": int(committed_start),
         "committed_end": int(committed_end),
     }
+    if pixel_rule:
+        # The tail handed to the model, clamped to the kept latent count. O is the same clamp
+        # on the decoded side, and is the head window's overlap, its guide and its head length.
+        n = min(_n_raw, prefix_count)
+        plan["decoded_prefix"] = int(o)
+        plan.update({
+            "head_mode": "pixel_rule",
+            "prefix_source": "tail",
+            "head_prefix_latents": int(n),
+            "overlap_latents": int(n),
+            "overlap_decoded": int(o),
+            "assembly_overlap": int(o),
+            "guide_frames": int(o),
+            "new_latents": int(new_latents),
+            # 1 when the window-end window delivers one frame less than the request (the frame
+            # the cut stands on), 0 when it delivers the request in full.
+            "shared_cut_frame": int(shared_cut_frame),
+        })
+    return plan
 
 
 def h3_branch_head_plan(entry: dict, branch_point: dict, requested_new_frames) -> dict:
@@ -1646,7 +1702,7 @@ def h3_branch_head_plan(entry: dict, branch_point: dict, requested_new_frames) -
     committed end it is ``"B"`` — a fresh window whose kept portion is
     the containing window's full latent run (its geometry comes from
     the job's standard first-window plan), which ``anchor_head`` marks
-    as the GAP-3 anchor-head window when the end is cap-driven (the
+    as the anchor-head window when the end is cap-driven (the
     recorded ``h3_target_frames`` below the natural decoded length):
     the pure-new window whose first decoded frame re-anchors the
     carried window's last frame.
@@ -1744,7 +1800,7 @@ def h3_branch_head_plan(entry: dict, branch_point: dict, requested_new_frames) -
         head_frame_num = None
         head_output = None
         head_trim_new = 0
-        # GAP-3: the committed end is cap-driven (the recorded target
+        # The committed end is cap-driven (the recorded target
         # below the natural decoded length), so the fresh window's
         # first decoded frame re-anchors the carried window's last
         # frame.
@@ -1827,8 +1883,8 @@ def decode_kept_windows(decode_window, kept_specs, kept_frames, *, is_i2v=False,
 
     ``kept_specs`` are the sidecar's kept windows (1..K, the branch cut's
     containing window included) in window order. Raises ``ValueError`` when
-    a window cannot be decoded or the assembled run falls short of the cut
-    (the branch job keeps its source-pixel prefix instead).
+    a window cannot be decoded or the assembled run falls short of the cut:
+    a branch has no other source for those frames.
     """
     window_frames = []
     for spec in kept_specs:
@@ -1855,44 +1911,27 @@ def decode_kept_windows(decode_window, kept_specs, kept_frames, *, is_i2v=False,
 
 
 
-def _branch_audio_prefix_slice(audio_entry, video_entry, branch_point):
-    """The containing window's audio block sliced at the resolved cut, in
-    the sidecar's stored layout.
+def _branch_audio_prefix_slice(audio_entry, video_entry, branch_point, *, bridge_frames=None):
+    """The containing window's audio block sliced at the resolved cut, in stored layout.
 
-    The one shared time-ratio splice behind the two frozen-prefix splices
-    (:func:`branch_audio_prefix_latents`,
-    :func:`h3_branch_audio_prefix_latents`) and the cut block's audio
-    carry-over (:func:`branch_cut_audio_window_block`). The slice is pure
-    time: the kept region covers the first ``length`` decoded frames of the
-    containing window (the cut's decoded position with the cut inside the
-    window, the window's committed length when the cut ends it), so it
-    spans that fraction of the window's audio block, measured with the
-    sidecar's recorded duration (the block's ``samples`` at the entry's
-    ``sample_rate`` against ``length / fps``, falling back to the window's
-    decoded length) and cut on the block's latent-time grid. With the cut
-    inside the window (the mid-latent default, or the rounded resolution)
-    the slice is the head of the block; with the cut at the window's
-    committed end it is the block's committed tail (the kept frames start
-    where the source window committed, i.e. after its own head trim).
+    The one shared time-ratio splice behind the frozen audio prefixes
+    (:func:`branch_audio_prefix_latents` and its family variants) and the cut block's
+    audio carry-over. The slice is pure time: the kept region covers the first ``length``
+    decoded frames of the window, so it spans that fraction of the window's audio block,
+    measured on the block's recorded ``samples`` and ``sample_rate`` against
+    ``length / fps`` and cut on the block's latent-time grid. It ends at the block's own
+    end when the cut ends the window, and at the cut's step otherwise.
 
-    The layout follows the video spec: the mel families store the block as
-    ``[c, t * mel]`` (the mel bins recorded at save time) and the slice
-    keeps a whole number of mel frames; the flat families — MiniMax H3's
-    ``[64, t]``, Magi Human's ``[64, t]``, Ovi's ``[20, t]`` — store one
-    column per latent time step and the slice keeps a whole number of
-    columns.
+    ``bridge_frames`` keeps only the last ``bridge_frames`` before the cut - the audio of
+    the bridge a pixel-rule branch re-denoises. Such a head window stores its audio after
+    the bridge it froze, so its block starts ``overlap_decoded`` frames into its window;
+    the returned ``origin_frames`` says where the block's first step sits and the splice
+    accounts for it. Mel families store ``[c, t * mel]``, flat families one column per
+    latent time step.
 
-    ``audio_entry``/``video_entry`` are the sidecar's
-    ``wgp_latent/audio/1`` and ``wgp_latent/1|2`` entries;
-    ``branch_point`` is the dict returned by :func:`branch_point_for_frame`
-    for the video entry. Returns a dict with ``flat`` (the 2D slice),
-    ``count`` (the slice's latent time steps), ``t_k`` (the block's full
-    step count), ``tail`` (whether the slice is the committed tail),
-    ``layout`` (``"h3"`` / ``"magi"`` / ``"ovi"`` / ``"mel"``) and
-    ``block`` (the containing window's raw audio block), or ``None`` when
-    the sidecar carries no usable audio for the branch point (no audio
-    entry, no window block, missing mel/sample-rate/fps bookkeeping, or a
-    degenerate slice).
+    Returns ``flat``, ``count``, ``start``, ``end``, ``origin_frames``, ``samples``,
+    ``t_k``, ``tail``, ``layout`` and the window's raw ``block``, or None when the sidecar
+    carries no usable audio for this cut.
     """
     if not isinstance(branch_point, dict) or not isinstance(audio_entry, dict) or not isinstance(video_entry, dict):
         return None
@@ -1979,55 +2018,81 @@ def _branch_audio_prefix_slice(audio_entry, video_entry, branch_point):
     samples = int(audio_block.get("samples") or 0)
     sample_rate = int(audio_entry.get("sample_rate") or 0)
     fps = float(video_entry.get("fps") or 0)
-    if samples > 0 and sample_rate > 0 and fps > 0:
-        window_seconds = float(samples) / float(sample_rate)
-        if window_seconds > 0:
-            count = int(round(t_k * (float(length) / fps) / window_seconds))
-        else:
-            count = int(round(t_k * float(length) / natural_window))
+    # A pixel-rule head window stores its audio without the bridge the model froze at its
+    # head, so the block starts ``overlap_decoded`` frames into its window while a cut inside
+    # the window is measured from the window's decoded start; the two origins have to be
+    # reconciled or every slice slides toward the block's head by a bridge. The recorded
+    # duration is untouched, so only positions move.
+    origin = 0
+    if not tail and str(video_spec.get("branch_head_mode") or "") == "pixel_rule":
+        origin = max(0, int(video_spec.get("overlap_decoded") or 0))
+    if not tail and origin and length <= origin:
+        # Nothing the block holds lies before the cut.
+        return None
+    natural_span = max(1, natural_window - origin)
+    block_seconds = (float(samples) / float(sample_rate)
+                     if samples > 0 and sample_rate > 0 else 0.0)
+
+    def _scale(frames):
+        # ``frames`` decoded frames of the block's own coverage as latent
+        # steps, measured on the block's recorded duration when it has one.
+        if block_seconds > 0 and fps > 0:
+            return int(round(t_k * (float(frames) / fps) / block_seconds))
+        return int(round(t_k * float(frames) / natural_span))
+
+    def steps_at(position):
+        # The block's step at the window's decoded frame ``position`` (a
+        # position on the window's timeline, so the block's head is origin).
+        return _scale(max(0, int(position) - origin))
+
+    def steps_span(duration):
+        # A run of ``duration`` decoded frames as latent steps: a length, not a
+        # position - the block's origin cancels out of it.
+        return _scale(max(0, int(duration)))
+
+    # The slice's end on the block's step grid: the block's own end for a cut at the window's
+    # committed end, the cut's own step for a cut inside it.
+    count = max(1, min(steps_at(length), t_k))
+    end = t_k if tail else count
+    if bridge_frames is not None:
+        end_span = max(1, min(steps_span(bridge_frames), t_k))
     else:
-        count = int(round(t_k * float(length) / natural_window))
-    count = max(1, min(count, t_k))
+        end_span = count
+    start = max(0, end - end_span)
+    count = end - start
     if is_h3 or is_mag or is_ovi:
-        flat = block[:, (t_k - count):] if tail else block[:, :count]
+        flat = block[:, start:end]
     else:
-        flat = block[:, (t_k - count) * mel:] if tail else block[:, :count * mel]
+        flat = block[:, start * mel:end * mel]
     return {
         "flat": flat,
         "count": int(count),
+        # Where the slice sits on the step grid, and the frame offset the block's first step
+        # sits at inside its window (the pixel rule's bridge, 0 for every other block).
+        "start": int(start),
+        "end": int(end),
+        "origin_frames": int(origin),
         "t_k": int(t_k),
         "tail": bool(tail),
+        # The slice's duration at the block's sample rate (the block's samples
+        # per latent step times its step count), 0 when the block records none.
+        "samples": int(round(count * samples / t_k)) if samples > 0 else 0,
         "layout": "h3" if is_h3 else ("magi" if is_mag else ("ovi" if is_ovi else "mel")),
         "block": audio_block,
     }
 
 
-def branch_audio_prefix_latents(audio_entry, video_entry, branch_point):
-    """The sidecar's kept audio latent run, as a frozen prefix for the branch
-    job's head window (LTX2 Phase 2).
+def branch_audio_prefix_latents(audio_entry, video_entry, branch_point, *, bridge_frames=None):
+    """The sidecar's kept audio latents as a frozen prefix for the branch head window.
 
-    Instead of re-encoding the branch job's source audio waveform, the head
-    window's audio prefix is the sidecar's own pre-decode latents, sliced by
-    a pure time ratio: the frozen prefix covers the first ``length`` decoded
-    frames of the containing window, so it spans that fraction of the
-    window's audio block, measured with the sidecar's recorded duration
-    (the block's ``samples`` at the entry's ``sample_rate`` against
-    ``length / fps``). With the cut inside the window (the mid-latent
-    default, or the rounded resolution) the prefix is the head of the
-    block; with the cut at the window's committed end it is the block's
-    committed tail (the branch window's frozen frames start where the
-    source window committed, i.e. after its own head trim).
-
-    ``audio_entry``/``video_entry`` are the sidecar's ``wgp_latent/audio/1``
-    and ``wgp_latent/1|2`` entries; ``branch_point`` is the dict returned by
-    :func:`branch_point_for_frame` for the video entry. Returns a batched
-    ``[1, c, t, mel]`` tensor (the audio VAE's pre-decode layout) or ``None``
-    when the sidecar carries no usable audio for the branch point (no audio
-    entry, no window block, missing mel/sample-rate/fps bookkeeping, or a
-    degenerate slice). The shared time-ratio splice behind this function
-    and its H3 companion is :func:`_branch_audio_prefix_slice`.
+    The prefix is the sidecar's own pre-decode latents rather than a re-encode of the
+    waveform, so the soundtrack continues across the cut. ``bridge_frames`` restricts it
+    to the bridge a pixel-rule branch freezes; the full freeze leaves it unset and takes
+    the whole kept run. Returns a batched ``[1, c, t, mel]`` tensor or None; the splice is
+    :func:`_branch_audio_prefix_slice`.
     """
-    slice_info = _branch_audio_prefix_slice(audio_entry, video_entry, branch_point)
+    slice_info = _branch_audio_prefix_slice(audio_entry, video_entry, branch_point,
+                                            bridge_frames=bridge_frames)
     if slice_info is None or slice_info["layout"] != "mel":
         return None
     mel = int(audio_entry.get("mel_bins") or 0)
@@ -2037,7 +2102,7 @@ def branch_audio_prefix_latents(audio_entry, video_entry, branch_point):
 
 def h3_branch_audio_prefix_latents(audio_entry, video_entry, branch_point):
     """The sidecar's kept MiniMax H3 audio latents, as the branch job's
-    frozen audio prefix (Phase 3).
+    frozen audio prefix.
 
     H3 stores its audio latent flat: the pipeline's batched ``[1, 32, 2, t]``
     state is recorded as ``[64, t]`` (the 32 latent channels times the two
@@ -2084,7 +2149,7 @@ def h3_branch_audio_prefix_latents(audio_entry, video_entry, branch_point):
 
 def magi_branch_audio_prefix_latents(audio_entry, video_entry, branch_point):
     """The sidecar's kept Magi Human audio latent run, as the branch job's
-    frozen audio prefix (Phase 3).
+    frozen audio prefix.
 
     Magi stores its audio latent flat (``[64, t]``, one 64-channel
     latent per pixel frame), so this is the flat-layout companion of

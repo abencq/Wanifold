@@ -32,6 +32,9 @@ class family_handler:
         cfg = {
             "wan_5B_class": True,
             "tiny_vae_architecture": "ti2v_2_2",
+            # Latent branch head: no guide door on this flow, so the encode of the kept
+            # tail is the head (see latent_jobs.branch_pixel_rule_capability).
+            "branch_pixel_rule": "encoded_head",
             "device_explicit": True,
             "text_encoder_URLs": [
                 build_hf_url("DeepBeepMeep/Wan2.1", text_encoder_folder, "models_t5_umt5-xxl-enc-bf16.safetensors"),

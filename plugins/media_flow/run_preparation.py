@@ -129,7 +129,7 @@ def prepare_run(
     except frames.FramePlanningError as exc:
         raise gr.Error(str(exc)) from exc
     if overlap_frames >= chunk_frames:
-        raise gr.Error(f"Sliding Window Overlap must stay below the computed chunk size ({chunk_frames} frame(s)).")
+        raise gr.Error(f"Sliding Window Overlap must stay below the computed chunk size of {chunk_frames} frames.")
     selected_unique_frames = end_frame_exclusive - start_frame
     try:
         full_plans = frames.build_chunk_plan(

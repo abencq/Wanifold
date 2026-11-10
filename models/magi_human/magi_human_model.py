@@ -19,7 +19,7 @@ from transformers.models.t5gemma import T5GemmaEncoderModel
 from shared.utils import files_locator as fl
 from shared.utils.loras_mutipliers import update_loras_slists
 from shared.utils.text_encoder_cache import TextEncoderCache
-from shared.utils import latent_io
+from shared.utils import latent_branch_head, latent_io
 from shared.utils.utils import calculate_new_dimensions
 from models.wan.modules.vae2_2 import Wan2_2_VAE
 
@@ -383,6 +383,17 @@ class MagiHumanModel:
             image_tensor = self.video_processor.preprocess(image_pil, height=height, width=width)[0].to(device=self.device, dtype=self.VAE_dtype)
             latents.append(self.vae.encode([image_tensor.unsqueeze(1)], tile_size=tile_size)[0])
         return torch.stack(latents, dim=0).to(device=self.device, dtype=torch.float32)
+
+    def _encode_pixel_run(self, frames: torch.Tensor, height: int, width: int, tile_size: int):
+        """A ``[3, f, h, w]`` run in [-1, 1] as one video latent: every frame taken to
+        this pass's canvas the way a start image is, then one temporal encode."""
+        run = frames.float().clamp(-1, 1).add(1).mul(127.5).to(torch.uint8)
+        resized = []
+        for i in range(int(run.shape[1])):
+            frame_pil = resizecrop(Image.fromarray(run[:, i].permute(1, 2, 0).cpu().numpy()), height, width)
+            resized.append(self.video_processor.preprocess(frame_pil, height=height, width=width)[0])
+        run = torch.stack(resized, dim=1).to(device=self.device, dtype=self.VAE_dtype)
+        return self.vae.encode([run], tile_size=tile_size)[0].to(device=self.device, dtype=torch.float32)
 
     def _resolve_vae_tile_size(self, VAE_tile_size, height: int, width: int):
         if isinstance(VAE_tile_size, dict):
@@ -753,6 +764,7 @@ class MagiHumanModel:
         window_start_frame_no=0,
         prefix_latents=None,
         prefix_audio_latents=None,
+        branch_head_mode=None,
         prefix_kept_windows=None,
         prefix_kept_frames=0,
         prefix_is_i2v=False,
@@ -785,11 +797,65 @@ class MagiHumanModel:
             uncond_prompt_embeds, uncond_prompt_lens = self._get_uncond_prompt(n_prompt)
         else:
             uncond_prompt_embeds, uncond_prompt_lens = None, None
-        if input_video is None:
-            # A branch job without a companion video (the kept region
-            # comes from the sidecar, not from source pixels): the start
-            # frame is a placeholder - the frozen branch prefix overwrites
-            # the frame-0 freeze at every step when it is accepted.
+        # Latent branch: the kept region as frames, decoded once and shared by the head
+        # window's pixels and the output's kept prefix.
+        _kept_run_cache = []
+
+        def _kept_tile_size():
+            return self._resolve_vae_tile_size(VAE_tile_size, int(height), int(width))
+
+        def _decode_kept_window(spec):
+            _lat = spec["latents"]
+            if _lat.dim() == 4:
+                _lat = _lat.unsqueeze(0)
+            return self._decode_video(_lat.to(self.device), _kept_tile_size())
+
+        def _kept_region():
+            if not _kept_run_cache:
+                _kept_run_cache.append(None)
+                if prefix_kept_windows is not None and int(prefix_kept_frames or 0) > 0:
+                    try:
+                        _kept_run_cache[0] = latent_branch_head.kept_frames(
+                            _decode_kept_window, prefix_kept_windows, int(prefix_kept_frames),
+                            is_i2v=bool(prefix_is_i2v))
+                    except latent_branch_head.BranchRefusal as exc:
+                        raise latent_branch_head.BranchRefusal(
+                            f"Latent branch: {exc}; the branch keeps no pixels but the latent file's.") from exc
+            return _kept_run_cache[0]
+
+        # The rule's head is always an encode: the file's latents slice the source run's
+        # frames, not this window's. Its pixels are the kept decode's tail, and the canvas
+        # follows that decode.
+        _rule_tail = None
+        _rule_frozen = 0
+        if (window_no == 1 and torch.is_tensor(prefix_latents)
+                and str(self.model_def.get("branch_pixel_rule") or "") == "encoded_head"
+                and str(branch_head_mode or "") == "pixel_rule"):
+            _frozen_prefix = prefix_latents[0] if prefix_latents.dim() == 5 else prefix_latents
+            _overlap = int(prefix_frames_count or 0)
+            _rule_frozen = int(_frozen_prefix.shape[1])
+            if _rule_frozen < 1 or latent_branch_head.head_latent_count(
+                    _overlap, self.vae_stride[0], 1) != _rule_frozen:
+                raise latent_branch_head.BranchRefusal(
+                    f"Latent branch: this model's {self.vae_stride[0]}/1 latent grid cannot put "
+                    f"{_rule_frozen} frozen latent(s) behind a {_overlap}-frame overlap; "
+                    f"the branch needs another overlap.")
+            _kept_run = _kept_region()
+            if _kept_run is None:
+                # The assembly draws the kept region from this window's own decode, so
+                # the head's pixels come from the frozen tail alone.
+                _kept_run = self._decode_video(
+                    _frozen_prefix.unsqueeze(0).to(self.device), _kept_tile_size())
+            height, width = int(_kept_run.shape[-2]), int(_kept_run.shape[-1])
+            _rule_tail = latent_branch_head.tail_frames(_kept_run, _overlap).float()
+
+        if _rule_tail is not None:
+            # The kept decode owns this window's frames, companion included: its last
+            # frame is the start image.
+            image_batch = _rule_tail[:, -1].unsqueeze(0)
+        elif input_video is None:
+            # With no companion and no branch head the frame-0 latent is a placeholder:
+            # the accepted branch prefix overwrites it at every step.
             image_batch = torch.full((1, 1, 3, int(height), int(width)), -1.0, device=self.device, dtype=torch.float32)
         else:
             image_batch = input_video[:, -1].unsqueeze(0)
@@ -818,17 +884,20 @@ class MagiHumanModel:
             device=self.device,
             dtype=torch.float32,
         )
-        # Latent branch (Phase 3): the kept latents of the sidecar's
-        # containing window, spliced verbatim at the tensor head instead
-        # of a fresh encode. The denoise loop re-freezes them at every
-        # step (the same way it re-freezes the frame-0 image latent),
-        # which keeps the kept portion bit-identical for the whole run;
-        # only the latents after the prefix get stepped. The SR model
-        # resolves the kept latents at its own (finer) grid, so the phase
-        # 1 freeze uses a spatially resolved-down copy there.
+        # The head window's frozen latents stand at the tensor head and the denoise loop
+        # re-freezes them at every step, so only the latents after them get stepped. The SR
+        # model resolves the head at its own finer grid, so phase 1 freezes a resolved-down copy.
         branch_video_prefix = None
         branch_prefix_full_grid = None
-        if torch.is_tensor(prefix_latents):
+        if _rule_tail is not None:
+            if _rule_frozen > latent_frames:
+                raise latent_branch_head.BranchRefusal(
+                    f"Latent branch: the head needs {_rule_frozen} latent(s) of a "
+                    f"{latent_frames}-latent window; the branch needs a shorter overlap.")
+            branch_video_prefix = self._encode_pixel_run(
+                _rule_tail, height, width, _kept_tile_size()).unsqueeze(0)
+            print(f"Latent branch: the kept latents of the source latent file were decoded to the {int(_rule_tail.shape[1])} frames of the head window: the head is the encode of those frames on this window's grid, and none of the file's latents are frozen.")
+        elif torch.is_tensor(prefix_latents):
             if prefix_latents.dim() == 4:
                 prefix_latents = prefix_latents.unsqueeze(0)
             if prefix_latents.dim() == 5:
@@ -966,27 +1035,10 @@ class MagiHumanModel:
         video = self._decode_video(final_video_latent, final_tile_size)
         audio = self._decode_audio(final_audio_latent[:1])
         result = {"x": video, "audio": audio, "audio_sampling_rate": 44100}
-        # Latent branch (Phase 3, step 2): the kept region as a fresh
-        # decode of the source sidecar's kept windows (the same
-        # reconstruction the Latent Decode job performs: the per-window
-        # recorded trims, the family's grid), handed back as
-        # decoded_prefix so the job uses it as the output video's prefix
-        # instead of a re-extraction of the source video (source
-        # independence). Best effort: any failure keeps the source-pixel
-        # prefix the job extracted before the model call.
+        # Latent branch: the kept region, handed back as decoded_prefix so the job uses
+        # it as the output video's prefix - the same decode the head window stood on.
         if prefix_kept_windows is not None and int(prefix_kept_frames or 0) > 0:
-            def _decode_kept_window(spec):
-                _lat = spec["latents"]
-                if _lat.dim() == 4:
-                    _lat = _lat.unsqueeze(0)
-                return self._decode_video(_lat.to(self.device), final_tile_size)
-            try:
-                decoded_prefix = latent_io.decode_kept_windows(
-                    _decode_kept_window, prefix_kept_windows, int(prefix_kept_frames),
-                    is_i2v=bool(prefix_is_i2v))
-                result["decoded_prefix"] = decoded_prefix
-            except Exception as exc:
-                print(f"Latent branch: the kept region could not be decoded ({exc}); the output keeps the source-pixel prefix.")
+            result["decoded_prefix"] = _kept_region()
         if bool(save_latents):
             try:
                 result["latent_file_obj"] = self._build_latent_file_obj(

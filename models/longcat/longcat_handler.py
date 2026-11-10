@@ -63,6 +63,9 @@ class family_handler:
                 {
                     "fps": 15,
                     "profiles_dir": ["longcat_video"],
+                    # The avatar classes are driven by an audio guide and an identity image; the plain
+                    # video class takes the decoded kept tail through its own continuation door.
+                    "branch_pixel_rule": "guide_pixels",
                 }
             )
         elif base_model_type in LONGCAT_AVATAR_TYPES:

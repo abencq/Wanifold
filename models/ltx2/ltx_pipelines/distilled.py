@@ -45,7 +45,6 @@ from .utils.helpers import (
     image_conditionings_by_adding_guiding_latent,
     image_conditionings_by_replacing_latent,
     latent_conditionings_by_latent_sequence,
-    prefix_video_latent_conditioning,
     multi_modal_guider_denoising_func,
     noise_video_state,
     paired_reference_conditionings_by_latents,
@@ -585,7 +584,6 @@ class DistilledPipeline:
         video_conditioning_downscale_factor: int = 1,
         video_conditioning_stage2: list[tuple[str, float]] | None = None,
         latent_conditioning_stage2: torch.Tensor | None = None,
-        prefix_video_latent: torch.Tensor | None = None,
         tiling_config: TilingConfig | None = None,
         enhance_prompt: bool = False,
         audio_conditionings: list | None = None,
@@ -857,31 +855,15 @@ class DistilledPipeline:
                 tiling_config=tiling_config,
             )
         else:
-            # Latent Branch (Phase 2): the sidecar's kept latents freeze the
-            # head of the window instead of a fresh encode of the guide
-            # pixels (stage 1 takes the bilinear half-resolution form).
-            prefix_cond = prefix_video_latent_conditioning(
-                prefix=prefix_video_latent,
+            stage_1_conditionings = image_conditionings_by_replacing_latent(
+                images=images,
                 height=stage_1_output_shape.height,
                 width=stage_1_output_shape.width,
-                num_frames=num_frames,
                 video_encoder=video_encoder,
                 dtype=dtype,
                 device=self.device,
-                stage_1=True,
+                tiling_config=tiling_config,
             )
-            if prefix_cond is not None:
-                stage_1_conditionings = [prefix_cond]
-            else:
-                stage_1_conditionings = image_conditionings_by_replacing_latent(
-                    images=images,
-                    height=stage_1_output_shape.height,
-                    width=stage_1_output_shape.width,
-                    video_encoder=video_encoder,
-                    dtype=dtype,
-                    device=self.device,
-                    tiling_config=tiling_config,
-                )
         stage_1_conditionings += stage_1_ref_conditionings
         if frozen_video_conditioning is None and guiding_images:
             stage_1_conditionings += image_conditionings_by_adding_guiding_latent(
@@ -1106,30 +1088,15 @@ class DistilledPipeline:
                 tiling_config=tiling_config,
             )
         else:
-            # Latent Branch (Phase 2): the full-resolution kept latents are
-            # frozen as-is at the head of the window (no re-encode).
-            prefix_cond = prefix_video_latent_conditioning(
-                prefix=prefix_video_latent,
+            stage_2_conditionings = image_conditionings_by_replacing_latent(
+                images=images_stage2 if images_stage2 is not None else images,
                 height=stage_2_output_shape.height,
                 width=stage_2_output_shape.width,
-                num_frames=num_frames,
                 video_encoder=video_encoder,
                 dtype=dtype,
                 device=self.device,
-                stage_1=False,
+                tiling_config=tiling_config,
             )
-            if prefix_cond is not None:
-                stage_2_conditionings = [prefix_cond]
-            else:
-                stage_2_conditionings = image_conditionings_by_replacing_latent(
-                    images=images_stage2 if images_stage2 is not None else images,
-                    height=stage_2_output_shape.height,
-                    width=stage_2_output_shape.width,
-                    video_encoder=video_encoder,
-                    dtype=dtype,
-                    device=self.device,
-                    tiling_config=tiling_config,
-                )
         stage_2_conditionings += stage_2_ref_conditionings
         if frozen_video_conditioning is None and guiding_images_stage2:
             stage_2_conditionings += image_conditionings_by_adding_guiding_latent(

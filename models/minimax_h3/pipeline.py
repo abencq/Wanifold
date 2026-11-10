@@ -14,7 +14,7 @@ from PIL import Image
 from tqdm import tqdm
 
 from mmgp import offload, transfer
-from shared.utils import latent_io
+from shared.utils import latent_branch_head, latent_io
 from shared.utils.loras_mutipliers import extract_loras_side, parse_loras_multipliers, update_loras_slists
 from shared.utils.text_encoder_cache import TextEncoderCache
 from shared.utils.phase_progress import control_video_encoding, generation_progress
@@ -1086,8 +1086,7 @@ class MiniMaxH3Pipeline:
         # plan derives from the sidecar's recorded totals — for a capped
         # window the decoded run's tail sits past the committed end, so the
         # slice comes from the plan, never from the window's recorded trims.
-        # Best effort: a decode that fails keeps the source-pixel path the
-        # job set up before the model call.
+        # A decode that fails stops the job: these frames have no other source.
         branch_decoded_prefix = None
         if prefix_kept_windows:
             try:
@@ -1095,7 +1094,8 @@ class MiniMaxH3Pipeline:
                     self.vae, prefix_kept_windows, prefix_kept_frames,
                     device=self.device, vae_dtype=self.vae._model_dtype, is_i2v=prefix_is_i2v)
             except Exception as exc:
-                print(f"[WanGP][H3] The branch's kept region could not be decoded ({exc}); the output keeps the source-video prefix.")
+                raise latent_branch_head.BranchRefusal(
+                    f"[WanGP][H3] The branch's kept region could not be decoded ({exc}); the branch keeps no other pixels than the latent file's.")
         # The disabled experiment aligns target overlap with the previous VAE grid (5 + 17n).
         # Retain support for legacy 1 + 17n prefixes when encoding an external continuation.
         overlap_offset = 5 if H3_CONTROL_LATENT_CONTINUATION and self.transformer.control_layers and int(_prefix_frames_count or 0) % 17 == 5 else 1

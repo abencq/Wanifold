@@ -70,8 +70,10 @@ my_shot_latent.pt        python -c "import torch; d = torch.load('my_shot_latent
   continuation's meaning: it is the new segment generated after the cut, and the job log prints the
   planned result (kept, new, total) before the first window generates. If the length recorded in
   the file ever disagrees with the video, *Latent Decode* still works, but a branch asks you to
-  re-run the original generation first. When the saved file cannot be used for the generation, the
-  branch falls back to the classic continuation.
+  re-run the original generation first. The kept part of a branch is rebuilt from the latent file and
+  never copied from the video — the video is only a viewing copy of what the file holds — so when
+  that file cannot be decoded for the job, the branch stops and says why instead of continuing on
+  the video's frames. Run the job without the latent file to continue from the video.
 
 - **Not covered:** the older LTX (0.9 / 1.0) builds its video in two stages, and its decode may add
   noise, so a re-decode would only be an approximation of the original. Hunyuan is not covered,

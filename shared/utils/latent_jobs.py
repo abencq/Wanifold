@@ -1,13 +1,12 @@
 # Copyright (c) 2026 DeepBeepMeep - part of WanGP, WanGP Community License 2.0 (see LICENSE.txt)
-"""The latent save/decode/branch engine, moved out of ``wgp.py`` (the latent
-refactor, phase 2).
+"""The latent save/decode/branch engine, moved out of ``wgp.py``.
 
 Everything the app needs to *save latents*, *decode a saved latent*
 (the Media Flow *Latent Decode* job) and *branch from a saved latent*: the
 model-family detection (which families write the all-latent sidecar), the
 branch-point resolution (the keep-frames field to a latent boundary), the
 branch-prefix preparation (the kept latents carried over the cut point),
-the per-family decode jobs (LTX2, MiniMax H3, Magi Human, Ovi) and the
+the per-family decode jobs (LTX2, Wan, MiniMax H3, Magi Human, Ovi) and the
 all-latent sidecar assembly (the ``*_latent.pt`` companion written next to
 the media).
 
@@ -150,6 +149,28 @@ def _is_h3_family(base_model_type, model_def):
     return str((model_def or {}).get("architecture") or "") in _H3_BASE_TYPES
 
 
+# How a family's head window takes the pixel rule: 'guide_pixels' (the head is the
+# kept region's decoded frames, fed through the doors a video continuation uses) or
+# 'encoded_head' (those frames are encoded onto the new window's grid and held).
+_BRANCH_PIXEL_RULE_CAPABILITIES = ("guide_pixels", "encoded_head")
+
+
+def branch_pixel_rule_capability(base_model_type, model_def):
+    """The family's pixel-rule capability, or None while it has none and its head
+    is frozen latents. LTX2 predates the declaration."""
+    capability = str((model_def or {}).get("branch_pixel_rule") or "")
+    if capability in _BRANCH_PIXEL_RULE_CAPABILITIES:
+        return capability
+    return "guide_pixels" if _is_ltx2_family(base_model_type, model_def) else None
+
+
+def branch_head_takes_rule(base_model_type, model_def):
+    """Whether the family builds its head from decoded pixels, either shape. Its
+    kept region is then drawn from one decode inside the engine, beside the head
+    it feeds, and never spliced into a window whose head that decode made."""
+    return branch_pixel_rule_capability(base_model_type, model_def) is not None
+
+
 # The Magi Human family's base types (the models.magi_human handler's
 # supported types): the catalog keeps the distill arch as its own
 # architecture (the handler's family maps fold it into the base only for
@@ -288,7 +309,7 @@ def _h3_window_commit(entry, model_def, window):
 
 
 # ---------------------------------------------------------------------------
-# Latent Branch (Phase 0): the *From latent* checkbox makes a *Continue Video*
+# Latent Branch: the *From latent* checkbox makes a *Continue Video*
 # / *Continue Last Video* job branch from the source video's saved
 # ``*_latent.pt`` sidecar: the branch point (the keep-frames field) resolves
 # to a latent boundary of the sidecar (before the latent containing the
@@ -549,7 +570,7 @@ def validate_latent_branch_task(ctx, state, model_type, inputs):
 
 
 # ---------------------------------------------------------------------------
-# Latent Branch (Phase 1): the branch job reuses the sidecar's kept latents
+# Latent Branch: the branch job reuses the sidecar's kept latents
 # as its head window's frozen prefix instead of re-encoding the source
 # pixels: the head window's denoised tensor is [the kept latents (verbatim
 # from the sidecar) | new latents], the kept portion stays bit-identical
@@ -569,11 +590,11 @@ _BRANCH_PREFIX_MODEL_TYPES = {
     "i2v", "i2v_2_2", "ti2v_2_2",
     "t2v", "t2v_1.3B", "t2v_2_2", "shotplan_t2v", "shotplan_t2v_2_2",
     "longcat_video", "longcat_avatar", "longcat_avatar_v1_5",
-    # LTX2 Phase 2: 8/1 causal layout, 32x spatial compression. The latent
+    # LTX2: 8/1 causal layout, 32x spatial compression. The latent
     # channel count varies with the VAE version (128 for the 2.3/2.5 VAEs),
     # so the VAE identity is checked through the checkpoint instead.
     "ltx2_19B", "ltx2_22B", "ltx2_25_22B",
-    # MiniMax H3 Phase 3: the piecewise 5/17 latent-to-pixel layout (the
+    # MiniMax H3: the piecewise 5/17 latent-to-pixel layout (the
     # linear stride/offset check is skipped for it), 16x spatial
     # compression, family-stable 24-channel VAE.
     "minimax_h3_fl2va", "minimax_h3_fl2va_pruned", "minimax_h3_ref2va",
@@ -607,7 +628,7 @@ _BRANCH_PREFIX_LAYOUTS = {
     "ltx2_19B": (8, 1, 32, None),
     "ltx2_22B": (8, 1, 32, None),
     "ltx2_25_22B": (8, 1, 32, None),
-    # MiniMax H3 Phase 3: the piecewise 5/17 latent-to-pixel layout cannot
+    # MiniMax H3: the piecewise 5/17 latent-to-pixel layout cannot
     # be expressed as stride/offset, so (0, 0) is the sentinel that makes
     # _prepare_branch_prefix skip the linear layout check; the canvas
     # rounds up to the 16x grid and the 24 channel count is
@@ -618,7 +639,7 @@ _BRANCH_PREFIX_LAYOUTS = {
     "minimax_h3_ref2va_pruned": (0, 0, 16, 24),
     "minimax_h3_tts_ref2va_pruned": (0, 0, 16, 24),
     "viggle_animate": (0, 0, 16, 24),
-    # Magi Human Phase 3: the Turbo VAED divides time by 4 (4/1) and space
+    # Magi Human: the Turbo VAED divides time by 4 (4/1) and space
     # by 16, with a 48-channel latent - the same linear layout the
     # Wan 2.2 5B class uses (the VAE identity check on top keeps the
     # checkpoints apart).
@@ -834,51 +855,47 @@ def _magi_video_vae_identity(model_def, base_model_type):
     return vae_file, vae_sha
 
 
-def _prepare_branch_prefix(entry, branch_point, carried, *, base_model_type, video_length, height=None, width=None, fit_canvas=None, audio_entry=None, vae_file="", vae_sha256="", model_def=None):
-    """Phase 1/2/3 fit check + head-window plan for a sidecar-sourced prefix.
+def _prepare_branch_prefix(entry, branch_point, carried, *, base_model_type, video_length, height=None, width=None, fit_canvas=None, audio_entry=None, vae_file="", vae_sha256="", model_def=None, head_mode="full_freeze", reuse_frames=None):
+    """Fit check + head-window plan for a sidecar-sourced branch prefix.
 
-    ``carried`` is the result of ``latent_io.carry_over_latent_windows`` for
-    the same sidecar / branch point. Returns ``(prefix, error)``: ``prefix``
-    is ``None`` unless the job model can take the sidecar's kept latents
-    verbatim (the family's layout and spatial size, a matching VAE identity,
-    and a head window that fits the kept run); then it carries the kept
-    latents, the head window geometry and the sidecar bookkeeping the new
-    job's companion file needs. The error string names the Phase 0 fallback
-    the job keeps when the fit fails.
+    Returns ``(prefix, error)``. ``prefix`` is None unless the job's model can take the
+    sidecar's kept latents verbatim - the family's layout and spatial size, a matching
+    VAE identity, a head window that fits the kept run - and the error then names the
+    fresh-encode fallback the job keeps. A returned prefix carries the kept latents, the
+    head window geometry and the bookkeeping the new sidecar needs.
 
-    For MiniMax H3 (Phase 3) the head window geometry comes from the
-    sidecar-only committed-totals plan (:func:`latent_io.h3_branch_head_plan`),
-    not the shared ``branch_head_window`` helper: every length routes
-    through the decode job's own arithmetic (the piecewise 5/17 decode capped
-    by the recorded target, the committed ranges), so the plan and the
-    decode cannot drift, and the plan is the source of the overlap /
-    guide / anchor values the job and the new sidecar use. The other
-    families keep the ``branch_head_window`` arithmetic.
+    MiniMax H3 plans through :func:`latent_io.h3_branch_head_plan`, so the plan and the
+    decode job's own arithmetic cannot drift; every other family uses
+    ``branch_head_window``.
 
-    ``audio_entry`` is the sidecar's ``wgp_latent/audio/1`` entry: for LTX2
-    jobs (Phase 2) the kept window's audio latents are additionally sliced
-    by time ratio and carried as ``prefix_audio_latents`` (a batched
-    ``[1, c, t, mel]`` tensor), so the head window's audio prefix does not
-    need a waveform re-encode; for MiniMax H3 jobs (Phase 3) the flat
-    ``[64, t]`` block is sliced the same way and carried as a
-    ``{"batched": [1, 32, 2, N], "flat": [64, N]}`` dict (Case A freezes the
-    batched prefix, Case B feeds the flat rows as the audio condition).
-    ``vae_file``/``vae_sha256`` are the job's LTX2, Wan, LongCat or
-    MiniMax H3 video VAE identity (see
-    :func:`_ltx2_video_vae_identity`, :func:`_wan_video_vae_identity`,
-    :func:`_longcat_video_vae_identity` and
-    :func:`_h3_video_vae_identity`).
+    ``audio_entry`` gives the head window a frozen audio prefix instead of a waveform
+    re-encode, in the layout the family stores it in; the pixel rule slices the bridge's
+    share and records it as ``audio_bridge_latents``. ``vae_file`` / ``vae_sha256`` are
+    the job's video VAE identity.
+
+    ``head_mode`` picks the freeze shape: "full_freeze" freezes the whole kept run, video
+    and audio; "pixel_rule" freezes the tail N latents and re-denoises the O-frame bridge
+    around them (N and O from :func:`latent_io.tail_latents_for_overlap` on
+    ``reuse_frames``). A family gets the rule only when it declares ``branch_pixel_rule`
+    (see :func:`branch_pixel_rule_capability`), and the prefix's ``head_mode`` says which
+    shape this job got. A cut at the window's committed end also returns
+    ``head_frame_num`` / ``head_output`` / ``head_trim_new`` whenever the plan derives
+    them, and the request is then the segment on top of the kept run.
     """
     layout = _BRANCH_PREFIX_LAYOUTS.get(str(base_model_type or ""))
     if layout is None:
         return None, f"model family '{base_model_type}' does not (yet) accept prefix latents carried over from the source latent file"
     expected_stride, expected_offset, spatial_divisor, expected_channels = layout
-    # Phase 3 (MiniMax H3): (0, 0) is the sentinel for the piecewise 5/17
+    # MiniMax H3: (0, 0) is the sentinel for the piecewise 5/17
     # latent-to-pixel layout, which the linear stride/offset check below
     # cannot express (the sidecar carries per-window frame metadata
     # instead); the channel check and the VAE identity check still apply.
     is_h3 = expected_stride == 0
     is_ltx2 = str(base_model_type or "").startswith("ltx2")
+    # The rule applies where the family says how its head takes pixels; families
+    # that say nothing keep their existing plan (the full freeze).
+    pixel_rule = str(head_mode) == "pixel_rule" and branch_pixel_rule_capability(
+        base_model_type, model_def) is not None
     specs = latent_io.entry_window_specs(entry)
     try:
         k = latent_io.branch_window_position(entry, branch_point, specs)
@@ -924,21 +941,23 @@ def _prepare_branch_prefix(entry, branch_point, carried, *, base_model_type, vid
             return None, (f"the latent size recorded in the source latent file ({int(prefix_latents.shape[2])}x{int(prefix_latents.shape[3])}) does not match the canvas of this job "
                           f"({_latent_h}x{_latent_w})")
     if is_h3:
-        # Phase 3 (MiniMax H3): the sidecar-only committed-totals plan
+        # MiniMax H3: the sidecar-only committed-totals plan
         # (see the function docstring). It rejects points the shared
         # helper would have planned silently (a cut claimed outside the
         # containing window's committed range, a kept run off the
-        # 2+5k grid), and the Phase 0 fresh-encode fallback takes over
+        # 2+5k grid), and the fresh-encode fallback takes over
         # for them.
         try:
             head = latent_io.h3_branch_head_plan(entry, branch_point, int(video_length or 0))
         except ValueError as err:
             return None, str(err)
     else:
-        head = latent_io.branch_head_window(entry, branch_point, int(video_length or 0), stride=stride, offset=offset)
+        head = latent_io.branch_head_window(entry, branch_point, int(video_length or 0), stride=stride, offset=offset,
+                                            head_mode="pixel_rule" if pixel_rule else "full_freeze",
+                                            overlap_frames=reuse_frames)
     kept = int(head["prefix_latents"])
     if is_h3 and head["cut_at_window_end"] and int(spec["latents"].shape[1]) != int(prefix_latents.shape[1]):
-        # Phase 3 (MiniMax H3): the committed end can sit inside the
+        # MiniMax H3: the committed end can sit inside the
         # latent run (a h3_target_frames cap trims the window's tail
         # share), and the Case B substitution freezes the window's full
         # latent run, which decodes to the capped length — not the
@@ -947,6 +966,11 @@ def _prepare_branch_prefix(entry, branch_point, carried, *, base_model_type, vid
         kept = int(spec["latents"].shape[1])
     if kept < 1 or kept != int(prefix_latents.shape[1]):
         return None, "the branch point keeps no latents"
+    if pixel_rule:
+        # The rule hands the model the kept latents' tail N; only this tensor shrinks. The kept
+        # count in K keeps its meaning, so the canvas and channel checks read the same values.
+        _n = int(head["head_prefix_latents"])
+        prefix_latents = prefix_latents[:, -_n:]
     head_trim_k = int(spec.get("head_trim") or 0)
     tail_trim_k = int(spec.get("tail_trim") or 0)
     if head["cut_at_window_end"]:
@@ -971,17 +995,29 @@ def _prepare_branch_prefix(entry, branch_point, carried, *, base_model_type, vid
             assembly_overlap = int(head["assembly_overlap"])
             guide_frames = int(head["guide_frames"])
         else:
-            # The window starts at the sidecar window's own start frame (the
-            # frozen latents decode at their original absolute positions, no
-            # shift): the decoded head that duplicates what already precedes it
-            # is the head share (the previous window's tail, or the re-extracted
-            # source prefix for the sidecar's own window 1), so the overlap
-            # is the decoded run minus that share.
-            assembly_overlap = max(1, decoded_window - head_trim_k)
-            guide_frames = decoded_window
-        head_frame_num = None
-        head_output = None
-        head_trim_new = 0
+            if pixel_rule:
+                # The frozen head is the kept run's tail N: the overlap the assembly drops and the
+                # guide are both the re-denoised overlap O.
+                assembly_overlap = int(head["assembly_overlap"])
+                guide_frames = int(head["assembly_overlap"])
+            else:
+                # The window starts at the sidecar window's own start frame: the decoded head that
+                # duplicates what precedes it is the head share, so the overlap is the run without it.
+                assembly_overlap = max(1, decoded_window - head_trim_k)
+                guide_frames = decoded_window
+        if not is_h3 and pixel_rule and int(head.get("frame_num") or 0) > 0:
+            # The plan's own head geometry: the re-denoised overlap plus the request rounded up to
+            # the latent grid, the overshoot trimmed. The request rides on top of the frozen head
+            # instead of spending the window's own budget.
+            head_frame_num = int(head["frame_num"])
+            head_output = max(1, int(head["new_frames"]))
+            head_trim_new = int(head["tail_trim_new"])
+        else:
+            # The full freeze (and the H3 piecewise layout) keep the caller's first-window geometry:
+            # the frozen prefix fills the window, so the tail windows make up the request.
+            head_frame_num = None
+            head_output = None
+            head_trim_new = 0
     else:
         # The cut falls inside the window: the new latents complete it up to
         # its committed end (clamped to the requested length, the overshoot
@@ -999,28 +1035,27 @@ def _prepare_branch_prefix(entry, branch_point, carried, *, base_model_type, vid
             head_output = int(head["head_output"])
             head_trim_new = int(head["head_trim_new"])
         else:
-            decoded_prefix = int(head["decoded_prefix"])
-            assembly_overlap = max(1, decoded_prefix)
-            guide_frames = decoded_prefix
+            if pixel_rule:
+                # The frozen head is the tail N's decoded length, so the overlap and the guide are both
+                # O; the window's own geometry comes from the plan.
+                assembly_overlap = int(head["assembly_overlap"])
+                guide_frames = int(head["assembly_overlap"])
+            else:
+                decoded_prefix = int(head["decoded_prefix"])
+                assembly_overlap = max(1, decoded_prefix)
+                guide_frames = decoded_prefix
             head_frame_num = int(head["frame_num"])
             head_output = int(head["new_frames"])
             head_trim_new = int(head["tail_trim_new"])
-    # Phase 2 (LTX2): the head window's audio prefix is the sidecar's kept
-    # audio latents sliced by time ratio, so the branch job does not
-    # re-encode the source waveform for it.
-    # Phase 3 (MiniMax H3): the same time-ratio splice on the flat
-    # [64, t] block, carried as {"batched": [1, 32, 2, N] frozen prefix,
-    # "flat": [64, N] condition rows}.
-    # Phase 3 (Magi Human): the same time-ratio splice on the flat
-    # [64, t] block (one 64-channel latent per pixel frame), carried in
-    # the sidecar's flat layout for the model to freeze at the head of
-    # the head window's audio tensor.
-    # Ovi: the same time-ratio splice on the flat [20, t] block (the
-    # mmaudio VAE's 20-channel 16 kHz mono latent), carried in the
-    # sidecar's flat layout for the model to freeze at the head of the
-    # head window's audio tensor.
+    # The head window's audio prefix is the source file's own audio latents sliced by time
+    # ratio, so the waveform is not re-encoded: the bridge only under the pixel rule, the
+    # whole kept run under the full freeze, in each family's stored layout.
     prefix_audio = None
-    if str(base_model_type or "").startswith("ltx2") and audio_entry is not None:
+    if pixel_rule:
+        if audio_entry is not None:
+            prefix_audio = latent_io.branch_audio_prefix_latents(
+                audio_entry, entry, branch_point, bridge_frames=int(assembly_overlap))
+    elif str(base_model_type or "").startswith("ltx2") and audio_entry is not None:
         prefix_audio = latent_io.branch_audio_prefix_latents(audio_entry, entry, branch_point)
     elif is_h3 and audio_entry is not None:
         prefix_audio = latent_io.h3_branch_audio_prefix_latents(audio_entry, entry, branch_point)
@@ -1067,25 +1102,43 @@ def _prepare_branch_prefix(entry, branch_point, carried, *, base_model_type, vid
         "head_output": head_output,
         "head_trim_new": int(head_trim_new),
         "cut_at_window_end": bool(head["cut_at_window_end"]),
+        # The frame the cut stands on (pixel-rule window-end only): the head window delivers one
+        # frame less, so the job lands on the length a video-file continuation reaches.
+        "shared_cut_frame": int(head.get("shared_cut_frame") or 0),
         "kept_frames": int(branch_point.get("kept_frames") or 0),
         "sidecar_window_no": int(k),
         "sidecar_start_frame": int(spec.get("start_frame") or 0),
         "containing_window_head_trim": int(containing_window_head_trim),
-        # Phase 3 (MiniMax H3): the plan's GAP-3 marker — the cut sits at
+        # MiniMax H3: the plan's anchor marker — the cut sits at
         # a capped window's committed end, so the fresh branch window's
         # first decoded frame re-anchors the carried window's last frame
         # (False for every other family).
         "anchor_head": bool(head.get("anchor_head") or False),
         "carried_image": carried_image,
+        # The head window's freeze shape (the sidecar writer records it on
+        # the head block as ``branch_head_mode``; absent on legacy files,
+        # which the reader reads as full freeze).
+        "head_mode": "pixel_rule" if pixel_rule else "full_freeze",
     }
+    if pixel_rule:
+        # The re-denoised bridge: the tail N handed to the model and its decoded length O.
+        # ``kept_frames`` above stays the full kept count; only the model's head is the tail.
+        prefix["prefix_source"] = "tail"
+        prefix["head_prefix_latents"] = int(head["head_prefix_latents"])
+        prefix["overlap_latents"] = int(head["overlap_latents"])
+        prefix["overlap_decoded"] = int(head["overlap_decoded"])
+        # The frozen audio bridge in audio latent steps: the writer drops the same steps from the
+        # head window's recording, because the cut block already carries them.
+        prefix["audio_bridge_latents"] = (int(prefix_audio.shape[2])
+                                          if torch.is_tensor(prefix_audio) and prefix_audio.dim() == 4 else 0)
     return prefix, ""
 
 
 def _branch_kept_window_specs(source_entry, branch_point):
     """The source sidecar's kept windows (1..K, the branch cut's containing
     window included) as decode-ready specs, plus the cut and the i2v flag —
-    the inputs to the branch job's kept-region decode (Step 2, every
-    latent-writing family).
+    the inputs to the branch job's kept-region decode, for every
+    latent-writing family.
 
     ``source_entry`` is the branch source's ``wgp_latent/1`` entry and
     ``branch_point`` the resolved branch point
@@ -1115,8 +1168,8 @@ def _branch_kept_window_specs(source_entry, branch_point):
 
 def _branch_kept_decode_compatible(entry, kept_specs, base_model_type, model_def, *, height, width, fit_canvas, vae_file="", vae_sha256=""):
     """Whether the job's VAE can decode the sidecar's kept windows onto the
-    job's canvas — the canvas-compatibility test for the kept-region decode
-    (Step 2). It is the fit check's VAE-identity and latent-size checks
+    job's canvas — the canvas-compatibility test for the kept-region decode.
+    It is the fit check's VAE-identity and latent-size checks
     minus the per-family prefix plan: the decode only needs the kept
     latents to belong to the job's VAE and to land on the job's latent
     grid, not the head window's willingness to freeze them, so it decides
@@ -1215,6 +1268,19 @@ def _build_cumulative_audio_payload(audio_entries):
     )
 
 
+def _recorded_branch_head_mode(branch_prefix):
+    """The head mode this branch job records on its sidecar entry.
+
+    "pixel_rule" when the plan cut this job under the rule, None otherwise (a file
+    without the field reads as a full freeze). The plan decides it, never the window's
+    latents: a rule window is guided by a decode of the kept run and matches the source
+    latents only by accident.
+    """
+    if branch_prefix is None or str(branch_prefix.get("head_mode") or "") != "pixel_rule":
+        return None
+    return "pixel_rule"
+
+
 def _all_latent_sidecar(ctx, latent_entry, latent_audio_entry, window_no, latent_windows, latent_audio_windows, *,
                         branch_prefix, sliding_window, reuse_frames, post_decode_pre_trim, trim_first_frames,
                         source_video_overlap_frames_count, discard_last_frames, automatic_trim_last_frames,
@@ -1222,7 +1288,8 @@ def _all_latent_sidecar(ctx, latent_entry, latent_audio_entry, window_no, latent
                         written_frame_count, model_def,
                         model_type="", base_model_type="", width=0, height=0,
                         splices_exact_image=True, branch_carried_image=None,
-                        branch_cut_video_block=None, branch_cut_audio_block=None):
+                        branch_cut_video_block=None, branch_cut_audio_block=None,
+                        branch_entry_head_mode=None):
     """Build the all-latent sidecar for one LTX2 / Wan / LongCat / MiniMax H3 job window.
 
     The all-latent sidecar is the sole content source of the video: one
@@ -1240,7 +1307,11 @@ def _all_latent_sidecar(ctx, latent_entry, latent_audio_entry, window_no, latent
     for a branch whose prefix this run rejected (``branch_prefix`` is None):
     the kept region's fresh decode spliced the source sidecar's image into
     frame 0 of the written video, so the new sidecar carries the same block
-    for the decode to splice back in.
+    for the decode to splice back in. ``branch_entry_head_mode`` mirrors
+    the head mode this job's branch recorded on its head window
+    (``"pixel_rule"``) onto the sidecar entry, so decoders, branches and
+    inspection can tell the rule apart without walking the window blocks;
+    ``None`` (a full-freeze or non-branch job) records nothing.
 
     ``latent_windows`` / ``latent_audio_windows`` are the repeat's
     accumulators (they already hold the branch's carried windows); this
@@ -1259,54 +1330,43 @@ def _all_latent_sidecar(ctx, latent_entry, latent_audio_entry, window_no, latent
     # assembly (they must be recorded exactly so the decode job can
     # re-assemble the original video).
     head_trim = int(post_decode_pre_trim) + int(trim_first_frames)
-    # The H3 branch head window's mode (``None`` for non-H3 jobs, non-branch
-    # windows, and H3 jobs whose prefix this run rejected — those keep the
-    # Phase-0 bookkeeping): ``"frozen"`` — the pipeline froze the kept
-    # latents at the head of the window's tensor (a Case A mid-cut);
-    # ``"anchor"`` — the pipeline accepted the Case B window-end
-    # substitution (``h3_anchor_head``): a pure-new window whose first
-    # decoded frame re-anchors the carried window's last frame;
-    # ``"rejected-end"`` — the pipeline's grid check rejected the kept run
-    # (it fills the whole containing window), so the head window is a
-    # fresh encode whose decoded region the assembly replaced with the
-    # containing window's own decode.
+    # The H3 branch head window's mode, or None: "frozen" (a mid-cut keeps the kept latents
+    # at the tensor head), "anchor" (the window-end substitution re-anchors frame 0), or
+    # "rejected-end" (the grid check rejected the kept run, so the head is a fresh encode).
+    #
+    # Beside it the linear-family head mode (LTX2, Wan): "pixel_rule" when the plan cut this
+    # job under the rule, else None. The plan decides it, not the latents the window returns: a
+    # rule window is guided by a decode and never holds the kept latents themselves.
+
     _h3_branch_mode = None
-    if window_no == 1 and branch_sidecar is not None and is_h3:
-        _prefix = branch_sidecar.get("prefix_latents")
-        _head_latents = latent_io.payload_latents(latent_entry)
-        # The pipeline freezes the kept latents at the head of the tensor in
-        # its own working dtype, so the comparison is tolerant to the
-        # dtype round trip (a fresh-encode head differs at the ~1.0 scale
-        # and never matches).
-        _prefix_honored = (
-            _prefix is not None and _head_latents is not None
-            and int(_head_latents.shape[1]) >= int(_prefix.shape[1])
-            and torch.allclose(_head_latents[:, :int(_prefix.shape[1])].float(), _prefix.float(), rtol=2e-2, atol=1e-2))
-        if int(latent_entry.get("h3_anchor_head") or 0) == 1:
-            _h3_branch_mode = "anchor"
-        elif _prefix_honored:
-            _h3_branch_mode = "frozen"
-        elif branch_sidecar.get("cut_at_window_end"):
-            _h3_branch_mode = "rejected-end"
+    _branch_head_mode = None
     if window_no == 1 and branch_sidecar is not None:
-        # Branch head window: the decoded head is the source window's own
-        # decoded head, so the block records a head trim that lets the
-        # decode re-assemble the video the job wrote. The frozen prefix
-        # (the carried kept latents) is the assembly's kept region itself:
-        # step 3 splices a fresh decode of it into the written video (never a
-        # re-extracted source segment), and it sits at the head of this
-        # block's decoded sample, so it is not an external overlap to trim —
-        # only the block's own head (the continuation overlap, the i2v slot,
-        # or the anchor frame) is dropped on decode.
+        if is_h3:
+            # H3 still freezes the carried latents verbatim, in its own working dtype, so its mode is
+            # read from the run; the comparison tolerates that dtype round trip.
+            _prefix = branch_sidecar.get("prefix_latents")
+            _head_latents = latent_io.payload_latents(latent_entry)
+            _prefix_honored = (
+                _prefix is not None and _head_latents is not None
+                and int(_head_latents.shape[1]) >= int(_prefix.shape[1])
+                and torch.allclose(_head_latents[:, :int(_prefix.shape[1])].float(), _prefix.float(), rtol=2e-2, atol=1e-2))
+            if int(latent_entry.get("h3_anchor_head") or 0) == 1:
+                _h3_branch_mode = "anchor"
+            elif _prefix_honored:
+                _h3_branch_mode = "frozen"
+            elif branch_sidecar.get("cut_at_window_end"):
+                _h3_branch_mode = "rejected-end"
+        elif str(branch_sidecar.get("head_mode") or "") == "pixel_rule":
+            _branch_head_mode = "pixel_rule"
+    if window_no == 1 and branch_sidecar is not None:
+        # The decoded head is the source window's own decoded head, so the block records the head
+        # trim that lets the decode re-assemble the video the job wrote. The carried kept latents
+        # are the kept region itself and are not an overlap to trim.
         if is_h3:
             if _h3_branch_mode == "frozen":
-                # The frozen head decodes the kept latents at its own head
-                # (the assembly splices a fresh decode of them into the
-                # written video in their place), so the recorded head trim
-                # is the window's own rebuilt history plus the kept
-                # latents' decoded length (the plan's assembly overlap): the
-                # block commits the new latents' decoded run only, and the
-                # kept region commits from its own cut block (below).
+                # The frozen head decodes the kept latents at its own head, where the assembly splices a
+                # fresh decode in, so the head trim is the rebuilt history plus the plan's assembly
+                # overlap and the block commits only the new latents' run.
                 head_trim = int(latent_entry.get("h3_history_frames") or 0) + int(branch_sidecar.get("assembly_overlap") or 0)
             elif _h3_branch_mode == "anchor":
                 # A Case B anchor head (the pipeline's h3_anchor_head: a
@@ -1317,27 +1377,26 @@ def _all_latent_sidecar(ctx, latent_entry, latent_audio_entry, window_no, latent
                 # drops that shared frame and no re-decoded history.
                 head_trim = 1
             else:
-                # ``rejected-end`` records the containing window's own
-                # block instead (below); when that block is unavailable the
-                # block keeps the containing window's own recorded head
-                # trim (0 for an all-latent t2v window 1, the i2v image slot
-                # for an i2v window 1, the window's own overlap for k > 1).
+                # ``rejected-end`` records the containing window's own block instead; when that block is
+                # unavailable, the block keeps the containing window's recorded head trim.
+                head_trim = int(branch_sidecar.get("containing_window_head_trim") or 0)
+        elif _branch_head_mode is not None:
+            # Pixel-rule head window: its head is the O-frame bridge the guide is held on, not
+            # the kept region, so the block's head share is the overlap both for a window-end cut
+            # and for a mid-cut. The clamped shape (kept == overlap) is the exception: that head
+            # is the whole kept region, no cut block is inserted, and the window keeps its own trim.
+            _kept = int(branch_sidecar.get("kept_frames") or 0)
+            _overlap = int(branch_sidecar.get("assembly_overlap") or 0)
+            if _kept != _overlap:
+                head_trim = _overlap
+            else:
                 head_trim = int(branch_sidecar.get("containing_window_head_trim") or 0)
         else:
-            # LTX2 / Wan / LongCat / Magi Human: an accepted prefix freezes
-            # the kept latents at the head of *this* window's own latent
-            # run, so the block itself carries the kept region and commits
-            # it - the recorded head trim is the containing window's own
-            # head trim (0 for an all-latent t2v window 1, the i2v image
-            # slot for an LTX2 i2v window 1, the decoded image frame's slot
-            # for a Wan i2v window 1, the window's own overlap for k > 1),
-            # exactly as for a mid-window cut. The exception is a window-end
-            # cut whose kept run is longer than the window's frozen head
-            # (the source sidecar keeps earlier windows in front of it, or
-            # an i2v window-1 head trim leaves the spliced image frame
-            # outside the assembly overlap): those frames come from a
-            # stand-alone decode, so the block keeps recording the assembly
-            # overlap the assembly trims it by.
+            # The full freeze (LTX2, Wan, LongCat, Magi Human): the kept latents are frozen at the
+            # head of this window's own run, so the block carries the kept region and records the
+            # containing window's own head trim. The exception is a window-end cut whose kept run
+            # is longer than that frozen head: those frames come from a stand-alone decode, so the
+            # block records the assembly overlap it is trimmed by.
             _kept = int(branch_sidecar.get("kept_frames") or 0)
             _overlap = int(branch_sidecar.get("assembly_overlap") or 0)
             if bool(branch_sidecar.get("cut_at_window_end")) and _kept != _overlap:
@@ -1421,13 +1480,25 @@ def _all_latent_sidecar(ctx, latent_entry, latent_audio_entry, window_no, latent
             # The anchor-head window records no re-decoded history: its
             # one-frame head trim drops the shared frame instead.
             window_meta["h3_history_frames"] = 0
-    if _h3_branch_mode in ("frozen", "anchor") and branch_cut_video_block is not None:
+    if _branch_head_mode == "pixel_rule":
+        # The rule's head block carries its own record: the guide tail the plan was cut on and the
+        # decoded bridge at its head. Every other block leaves the field absent, which reads as
+        # the full freeze.
+        window_meta["branch_head_mode"] = "pixel_rule"
+        window_meta["overlap_latents"] = int(branch_sidecar.get("overlap_latents") or 0)
+        window_meta["overlap_decoded"] = int(branch_sidecar.get("overlap_decoded") or 0)
+    if branch_cut_video_block is not None and (
+            _h3_branch_mode in ("frozen", "anchor")
+            or (_branch_head_mode == "pixel_rule"
+                and int(branch_sidecar.get("kept_frames") or 0) != int(branch_sidecar.get("assembly_overlap") or 0))):
         # The kept region commits from its own block: the containing
         # window's cut block (its kept latents, the decoded run capped at
         # the cut — the full window itself for a window-end cut), whose
         # stand-alone decode is exactly the kept region the assembly
         # spliced into the written video. It is inserted ahead of this
-        # head window's block, which commits the new portion only.
+        # head window's block, which commits the new portion only. The rule takes the same
+        # insertion, except in the clamped shape (kept == overlap), where a cut block would
+        # duplicate the head.
         latent_windows.append(dict(branch_cut_video_block))
     if _h3_branch_mode == "rejected-end" and branch_cut_video_block is not None:
         # The fresh head window's decoded region is not in the written
@@ -1454,6 +1525,32 @@ def _all_latent_sidecar(ctx, latent_entry, latent_audio_entry, window_no, latent
                 _head_start = int(_w.get("start_sample") or 0)
                 _w["start_sample"] = _head_start + (_cut_end - _head_start)
             latent_audio_windows.append(_rebased)
+        elif (_branch_head_mode == "pixel_rule" and branch_cut_audio_block is not None
+                and int((branch_sidecar or {}).get("audio_bridge_latents") or 0) > 0):
+            # The rule freezes the bridge's audio at the head of the audio tensor, so the recording
+            # starts after it: the cut block already holds those steps.
+            _bridge_cols = int((branch_sidecar or {}).get("audio_bridge_latents") or 0)
+            # The mel layout stores one mel_bins-wide column per audio latent
+            # step; the flat families store one column.
+            _bridge_cols *= max(1, int(latent_audio_entry.get("mel_bins") or 0))
+            _head_audio = dict(latent_audio_entry)
+            _head_audio["windows"] = [dict(_w) for _w in (latent_audio_entry.get("windows") or [])]
+            if _head_audio["windows"]:
+                _head0 = _head_audio["windows"][0]
+                _stored = int(_head0.get("latent_len") or 0)
+                _window_samples = int(_head0.get("samples") or 0)
+                _bridge_cols = min(max(0, _bridge_cols), _stored)
+                _drop = int(round(_window_samples * _bridge_cols / _stored)) if _stored > 0 else 0
+                _head0["latent_start"] = int(_head0.get("latent_start") or 0) + _bridge_cols
+                _head0["latent_len"] = _stored - _bridge_cols
+                _head0["samples"] = max(0, _window_samples - _drop)
+                # Whatever position the pipeline recorded for the window, its
+                # audio now follows the kept region's on the new track.
+                _head0["start_sample"] = max(
+                    [int(_w.get("start_sample") or 0) + int(_w.get("samples") or 0)
+                     for _carried in latent_audio_windows for _w in (_carried.get("windows") or [])]
+                    or [0])
+            latent_audio_windows.append(_head_audio)
         elif _h3_branch_mode != "rejected-end":
             # ``rejected-end``: the fresh head window's generated audio is
             # not in the written video (the containing window's own audio
@@ -1480,6 +1577,7 @@ def _all_latent_sidecar(ctx, latent_entry, latent_audio_entry, window_no, latent
             frame_offset=int(layout["offset"]),
             is_hdr=bool(sample_is_hdr),
             i2v_start_image=i2v_image,
+            **({"branch_head_mode": str(branch_entry_head_mode)} if branch_entry_head_mode else {}),
         )
     except Exception as exc:
         print(f"Latent save: the latent file could not be built ({exc}); it is not written.")
@@ -1889,7 +1987,7 @@ def _edit_latent_job_h3(ctx, send_cmd, state, video_source, client_id, plugin_da
     trims) so the decoded output matches the generated video, soundtrack
     included.
 
-    Placement is fully positional (step 6, D5 of the h3branch plan): every
+    Placement is fully positional: every
     length comes from the window's own recorded fields (``h3_target_frames``,
     ``h3_history_frames``, ``frame_count``, the head/tail trims) and the
     windows tile in sidecar order — video by concatenation, audio on the
@@ -2085,7 +2183,7 @@ def _edit_latent_job_h3(ctx, send_cmd, state, video_source, client_id, plugin_da
                     # canvas; the sidecar's per-window start_sample tracks the
                     # job's guide position (which drifts for later windows),
                     # not the assembled track, so it is not used here.
-                    # Step 6 (D5): an H3 branch anchor window (h3_anchor_head)
+                    # An H3 branch anchor window (h3_anchor_head)
                     # is the first sidecar window after the carried ones
                     # (window 1 itself when nothing is carried), so the cursor
                     # places its audio at the tail of the carried (committed)
@@ -2711,9 +2809,8 @@ def compute_fit_canvas(model_def, server_config, outpainting_dims):
 
 
 # ---------------------------------------------------------------------------
-# generate_media integration (the latent refactor, phase 4): the branch
-# head-window plan and the per-window latent sidecar write, moved out of
-# wgp.generate_media (the two largest remaining hunks of that function)
+# generate_media integration: the branch head-window plan and the per-window
+# latent sidecar write, moved out of wgp.generate_media
 # ---------------------------------------------------------------------------
 
 
@@ -2743,8 +2840,8 @@ def plan_branch_head_window(ctx, *, branch_latent_info, branch_prefix, branch_de
                             sliding_window_discard_last_frames, sliding_window,
                             frame_scheduler, scheduled_windows_template,
                             default_windows_template, window_plan) -> dict:
-    """The branch job's determinism + head-window plan, moved verbatim from
-    ``wgp.generate_media`` (the latent refactor, phase 4).
+    """The branch job's determinism + head-window plan, moved out of
+    ``wgp.generate_media``.
 
     The seed and the prompt are prefilled from the sidecar (only when the
     fields are empty / random) so the branch reuses the source job's
@@ -2787,6 +2884,10 @@ def plan_branch_head_window(ctx, *, branch_latent_info, branch_prefix, branch_de
         # The user's requested new frames (the scheduler replaced video_length
         # with its own predicted total, so the request is read back from it).
         _request = int(frame_scheduler.get("requested_total_frames") or current_video_length or video_length or 0) if scheduler_active else int(current_video_length or video_length or 0)
+        # The frame the cut stands on: the pixel-rule window-end plan hands one frame of the
+        # request to the cut, so the total is one frame shorter - the length a classic video
+        # continuation reaches. A cut inside the window spends nothing and reports 0.
+        _request = max(0, _request - int(branch_prefix.get("shared_cut_frame") or 0))
         if not branch_prefix["cut_at_window_end"]:
             # Case A: the head window is [the frozen prefix | the new
             # latents that complete the containing window]; its frame
@@ -2882,18 +2983,41 @@ def plan_branch_head_window(ctx, *, branch_latent_info, branch_prefix, branch_de
             if not scheduler_active:
                 sliding_window = len(default_windows) > 1 or default_windows[0]["overlap_frames"] > 0
         else:
-            # Case B: the standard first window keeps its geometry; its
-            # overlap becomes the frozen prefix's decoded length, so its
-            # new share is the small sliver left in the window's budget
-            # (the fit check already required the window to hold the kept
-            # run). The request is the new segment after the kept region
-            # (the classic continuation's reading of the frame count), so
-            # the tail windows make up the rest of it.
-            def _branch_case_b_window(w, discard):
+            # Case B: the cut sits at the containing window's committed end, so the head window is
+            # fresh and its frozen head is the kept run's tail (the pixel rule) or the kept run
+            # itself (the full freeze). With head geometry from the plan the window is that overlap
+            # plus the request; without it the standard first window keeps its geometry and its new
+            # share is what its budget still leaves. Either way the tail windows make up the rest.
+            def _branch_case_b_window(w, discard, grow=False):
                 _w = dict(w)
                 _w["overlap_frames"] = int(branch_prefix["assembly_overlap"])
                 _w["discard_last_frames"] = discard if not window_plan.any_sliding_window else int(_w.get("discard_last_frames") or 0)
-                _w["output_frames"] = max(1, int(_w.get("frame_num") or 0) - int(_w["overlap_frames"]) - int(_w["discard_last_frames"]))
+                if branch_prefix.get("head_frame_num"):
+                    # The plan's head geometry survived (the pixel rule): the
+                    # frozen overlap plus the request, the overshoot trimmed.
+                    _w["frame_num"] = int(branch_prefix["head_frame_num"])
+                    _w["output_frames"] = max(1, int(branch_prefix.get("head_output") or 0))
+                    _w["trim_last_frames"] = int(branch_prefix.get("head_trim_new") or 0)
+                elif grow and _branch_stride > 0 and not _is_h3_family(base_model_type, window_plan.model_def):
+                    # One window is the whole output here (no sliding window, no scheduler), so the
+                    # window grows: the frozen head plus the new latents on the same grid, the
+                    # rounding overshoot trimmed. The request is not charged against the head's share.
+                    _new_latents = max(1, -(-(_request + int(_w["discard_last_frames"])) // _branch_stride))
+                    _w["frame_num"] = int(_w["overlap_frames"]) + _branch_stride * _new_latents
+                    _w["trim_last_frames"] = max(0, int(_w["frame_num"]) - int(_w["overlap_frames"])
+                                                 - int(_w["discard_last_frames"]) - _request)
+                    _w["output_frames"] = max(1, int(_w["frame_num"]) - int(_w["overlap_frames"])
+                                              - int(_w["discard_last_frames"]) - int(_w["trim_last_frames"]))
+                    print(f"From latent: the frozen prefix of {int(_w['overlap_frames'])} frames and the requested {_request} new frames fit one window: the first window becomes {int(_w['frame_num'])} frames"
+                          + (f", {int(_w['trim_last_frames'])} of them trimmed to land on the request." if int(_w["trim_last_frames"]) else "."))
+                else:
+                    _sliver = (int(_w.get("frame_num") or 0) - int(_w["overlap_frames"])
+                               - int(_w["discard_last_frames"]))
+                    _w["output_frames"] = max(1, _sliver)
+                    if _sliver < int(window_plan.frames_minimum or 0):
+                        # The frozen prefix already fills the window, so the head window can only contribute its
+                        # minimum new block; say so rather than let a handful of frames read as the request.
+                        print(f"From latent: the frozen prefix already fills the first window, so it contributes {int(_w['output_frames'])} new frame(s) of the requested {_request}; the following window(s) make up the rest (the kept {int(branch_prefix['kept_frames'])} frames are on top).")
                 _w["new_shot"] = False
                 return _w
             def _branch_case_b_tail(w0):
@@ -2942,25 +3066,23 @@ def plan_branch_head_window(ctx, *, branch_latent_info, branch_prefix, branch_de
                 if len(default_windows_template) == 0 or int(default_windows_template[0].get("frame_num") or 0) < _prefix_decoded_frames:
                     _case_b_ok = False
                 else:
-                    default_windows_template[0] = _branch_case_b_window(default_windows_template[0], _head_discard)
+                    # No sliding window and no scheduler: this job writes one window as one video, so the
+                    # head window grows to hold the frozen run plus the whole request.
+                    default_windows_template = [_branch_case_b_window(default_windows_template[0], _head_discard, grow=True)]
             if not _case_b_ok:
                 branch_prefix = None
                 print("From latent: the first window is too small to hold the carried prefix, so it uses a fresh encode for this run (the pre-cut part of the output video is rebuilt from the kept windows of the source latent file).")
             else:
-                print(f"From latent: the first {_prefix_latent_count} latents of the first window keep the values of the source latent file unchanged (the branch point is the committed end of the contained window).")
+                if str(branch_prefix.get("head_mode") or "") != "pixel_rule":
+                    # The full freeze copies the kept latents into the head window
+                    # verbatim; the pixel rule rebuilds them from the decoded guide
+                    # frames, so it has nothing carried unchanged to announce.
+                    print(f"From latent: the first {_prefix_latent_count} latents of the first window keep the values of the source latent file unchanged, the branch point being the committed end of the contained window.")
             default_windows = [dict(window) for window in default_windows_template]
             if not scheduler_active:
                 sliding_window = len(default_windows) > 1 or default_windows[0]["overlap_frames"] > 0
-    # Gate 1: a latent-writing branch job whose prefix this run
-    # rejected still proceeds when the kept region is a fresh decode of
-    # the sidecar's kept windows (the branch_decode above): the head
-    # window uses a fresh encode and the job writes a self-contained
-    # file. It is refused only when the kept region genuinely cannot
-    # come from the latent file (the canvas / VAE tests failed, e.g. a
-    # canvas-changing mode or a file from another resolution / job):
-    # the message names the setting at fault and the honest option(s) —
-    # the pixel fallback (running the job without the latent file) only
-    # when a companion video is present to re-encode from.
+    # Gate 1 is the safety net here: wgp refuses an undecodable kept region before the model
+    # loads, so this only fires when a rejected prefix lands on such a region.
     if all_latent_job and branch_carried is not None and branch_prefix is None and branch_decode is None:
         _refusal_reason = str(prefix_error or "").strip() or str(decode_reason or "").strip() or "the branch cannot use the kept region of the source latent file"
         _option = ", or run the job without the latent file" if (branch_latent_info or {}).get("video_present", True) else ""
@@ -2987,7 +3109,13 @@ def plan_branch_head_window(ctx, *, branch_latent_info, branch_prefix, branch_de
             _plan_kept_part = f"{_plan_kept} source"
         _plan_windows = scheduled_windows_template if scheduler_active else default_windows_template
         _plan_new = sum(int(w.get("output_frames") or 0) for w in _plan_windows)
-        print(f"{_plan_prefix}: plan: {_plan_kept_part} + {_plan_new} new ({len(_plan_windows)} window(s)) = {_plan_kept + _plan_new} frames")
+        _plan_units = "window" if len(_plan_windows) == 1 else "windows"
+        _plan_history = int(_plan_windows[0].get("overlap_frames") or 0) if len(_plan_windows) > 0 else 0
+        # The frames the first window reads again as its history; one of them carries no
+        # motion at all, which is what the Continuation Overlap setting lifts.
+        _plan_history_part = "" if _plan_history <= 0 else (
+            f", carrying {_plan_history} frame{'s' if _plan_history != 1 else ''} of history into the first window")
+        print(f"{_plan_prefix}: plan: {_plan_kept_part} + {_plan_new} new in {len(_plan_windows)} {_plan_units} = {_plan_kept + _plan_new} frames{_plan_history_part}")
     return {
         "seed": seed,
         "prompt": prompt,
@@ -3003,7 +3131,7 @@ def plan_branch_head_window(ctx, *, branch_latent_info, branch_prefix, branch_de
 
 class LatentWindowRecorder:
     """The per-window latent sidecar write, moved out of
-    ``wgp.generate_media`` (the latent refactor, phase 4).
+    ``wgp.generate_media``.
 
     The latent companion file is always written to disk (it is the
     handoff for Latent Decode) but never echoed in API responses, so it
@@ -3028,8 +3156,14 @@ class LatentWindowRecorder:
         self._model_type = str(model_type or "")
         self._base_model_type = str(base_model_type or "")
         self._fake_start_image = bool(fake_start_image)
-        self._h3_cut_video_block = branch_cut_video_block
-        self._h3_cut_audio_block = branch_cut_audio_block
+        # The accepted branch's cut block: the containing window's kept run capped at the cut,
+        # inserted ahead of the head window. Every shape whose head window does not contain the
+        # kept region carries one (H3's frozen or anchor head, and the pixel rule); else None.
+        self._branch_cut_video_block = branch_cut_video_block
+        self._branch_cut_audio_block = branch_cut_audio_block
+        # The head mode this job records on the entry, decided once when its head window is first
+        # written and carried by every later rebuild of the file.
+        self._branch_entry_head_mode = None
 
     def on_window(self, latent_file_obj, side_files, media_path, window_no, *,
                   sliding_window, latent_windows, latent_audio_windows,
@@ -3119,6 +3253,11 @@ class LatentWindowRecorder:
                 _latent_grid_ok = len(_latent_shape) >= 4 and _latent_canvas_factor > 0
                 _latent_width = int(_latent_shape[-1] * _latent_canvas_factor) if _latent_grid_ok else 0
                 _latent_height = int(_latent_shape[-2] * _latent_canvas_factor) if _latent_grid_ok else 0
+                if window_no == 1 and self._branch_prefix is not None and self._branch_entry_head_mode is None:
+                    # The entry-level mirror of the head mode: read from the
+                    # branch plan (the window's own latents say nothing about
+                    # the rule it was cut under).
+                    self._branch_entry_head_mode = _recorded_branch_head_mode(self._branch_prefix)
                 latent_side_bytes = _all_latent_sidecar(self._ctx,
                     latent_entry, latent_audio_entry, window_no, latent_windows, latent_audio_windows,
                     branch_prefix=self._branch_prefix,
@@ -3141,8 +3280,9 @@ class LatentWindowRecorder:
                     width=_latent_width,
                     height=_latent_height,
                     splices_exact_image=_all_latent_splices,
-                    branch_cut_video_block=self._h3_cut_video_block,
-                    branch_cut_audio_block=self._h3_cut_audio_block)
+                    branch_cut_video_block=self._branch_cut_video_block,
+                    branch_cut_audio_block=self._branch_cut_audio_block,
+                    branch_entry_head_mode=self._branch_entry_head_mode)
         else:
             latent_side_bytes = side_files.pop(latent_io.LATENT_SIDECAR_SUFFIX, None) if isinstance(side_files, dict) else None
         if latent_side_bytes is not None:

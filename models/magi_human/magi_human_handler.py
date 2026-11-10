@@ -56,6 +56,10 @@ class family_handler:
         is_distill = base_model_type == DISTILL_ARCH
         extra_model_def = {
             "tiny_vae_architecture": "ti2v_2_2",
+            # Latent branch head: the model freezes one latent at the tensor head and has
+            # no multi-frame guide door, so the encode of the kept tail is that head
+            # (see latent_jobs.branch_pixel_rule_capability).
+            "branch_pixel_rule": "encoded_head",
             "returns_audio": True,
             "any_audio_prompt": True,
             "audio_prompt_choices": True,

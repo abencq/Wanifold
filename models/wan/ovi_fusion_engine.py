@@ -11,7 +11,7 @@ from diffusers import FlowMatchEulerDiscreteScheduler
 from .ovi.utils.fm_solvers import (FlowDPMSolverMultistepScheduler,
                                get_sampling_sigmas, retrieve_timesteps)
 from shared.utils import files_locator as fl
-from shared.utils import latent_io
+from shared.utils import latent_branch_head, latent_io
 from .modules.vae2_2 import Wan2_2_VAE
 from .modules.t5 import T5EncoderModel
 from .ovi.modules.mmaudio.features_utils import FeaturesUtils
@@ -63,6 +63,7 @@ class OviFusionEngine:
         self.dtype = dtype
         self.sr = 16000
         self.fps = model_def.get("fps", 24)
+        self.model_def = model_def or {}
         self._interrupt = False
         self.last_audio = None
 
@@ -161,6 +162,9 @@ class OviFusionEngine:
                     save_latents=False,
                     prefix_latents=None,
                     prefix_audio_latents=None,
+                    prefix_frames_count=0,
+                    window_no=1,
+                    branch_head_mode=None,
                     prefix_kept_windows=None,
                     prefix_kept_frames=0,
                     prefix_is_i2v=False,
@@ -206,6 +210,57 @@ class OviFusionEngine:
             first_frame = None
             is_i2v = False
 
+        # Latent branch: the kept region as uint8 frames, decoded once and shared by
+        # the head window's pixels and the output's kept prefix.
+        _vae_dtype = getattr(self.vae, "dtype", None) or torch.float32
+        _kept_run_cache = []
+
+        def _decode_kept_window(spec):
+            _lat = spec["latents"].to(device=self.device, dtype=_vae_dtype)
+            _videos = self.vae.decode_to_cpu_uint8([_lat], VAE_tile_size)
+            return _videos[0].to("cpu") if _videos and _videos[0] is not None else None
+
+        def _kept_region():
+            if not _kept_run_cache:
+                _kept_run_cache.append(None)
+                if prefix_kept_windows is not None and int(prefix_kept_frames or 0) > 0:
+                    try:
+                        _kept_run_cache[0] = latent_branch_head.kept_frames(
+                            _decode_kept_window, prefix_kept_windows, int(prefix_kept_frames),
+                            is_i2v=bool(prefix_is_i2v))
+                    except latent_branch_head.BranchRefusal as exc:
+                        raise latent_branch_head.BranchRefusal(
+                            f"Latent branch: {exc}; the branch keeps no pixels but the latent file's.") from exc
+            return _kept_run_cache[0]
+
+        # The rule's head is always an encode: the file's latents slice the source run's
+        # frames, not this window's. Its pixels are the kept decode's tail, and the canvas
+        # follows that decode.
+        _rule_pixels = None
+        _rule_frozen = 0
+        if (window_no == 1 and not is_i2v and prefix_latents is not None
+                and str(self.model_def.get("branch_pixel_rule") or "") == "encoded_head"
+                and str(branch_head_mode or "") == "pixel_rule"):
+            _frozen_prefix = torch.as_tensor(prefix_latents)
+            if _frozen_prefix.dim() == 5:
+                _frozen_prefix = _frozen_prefix[0]
+            _overlap = int(prefix_frames_count or 0)
+            _rule_frozen = int(_frozen_prefix.shape[1]) if _frozen_prefix.dim() == 4 else 0
+            if _rule_frozen < 1 or latent_branch_head.head_latent_count(_overlap, 4, 1) != _rule_frozen:
+                raise latent_branch_head.BranchRefusal(
+                    f"Latent branch: this model's 4/1 latent grid cannot put {_rule_frozen} frozen latent(s) "
+                    f"behind a {_overlap}-frame overlap; the branch needs another overlap.")
+            _kept_run = _kept_region()
+            if _kept_run is None:
+                # The assembly draws the kept region from this window's own decode, so
+                # the head's pixels come from the frozen tail alone.
+                _kept_run = self.vae.decode_to_cpu_uint8(
+                    [_frozen_prefix.to(device=self.device, dtype=_vae_dtype)], VAE_tile_size)[0]
+            height, width = int(_kept_run.shape[-2]), int(_kept_run.shape[-1])
+            video_frame_height_width = (height, width)
+            _rule_pixels = latent_branch_head.guide_tail(
+                _kept_run, _overlap).to(device=self.device, dtype=_vae_dtype)
+
         if callback != None:
             callback(-1, None, True)
 
@@ -236,17 +291,22 @@ class OviFusionEngine:
             video_latent_length = 61
             audio_latent_length = 314
 
-        # Latent Branch (Phase 1): the head window's frozen prefixes are
-        # the sidecar's kept latents (the video prefix verbatim, the audio
-        # prefix the flat [20, t] block sliced by time ratio), so the
-        # branch does not re-encode the part it keeps; they are re-frozen
-        # at every denoise step and captured into the companion file with
-        # the rest of the window. Best effort: a prefix that does not
-        # match this window's latent grid is refused with a notice and the
-        # head window runs without it.
+        # The head window's frozen prefixes are re-frozen at every denoise step and captured
+        # with the rest of the window; the audio prefix is the file's flat [20, t] block
+        # sliced by time ratio. A video prefix off this window's latent grid runs without one.
         branch_video_prefix = None
         branch_audio_prefix = None
-        if prefix_latents is not None:
+        if _rule_pixels is not None:
+            if _rule_frozen > video_latent_length:
+                raise latent_branch_head.BranchRefusal(
+                    f"Latent branch: the head needs {_rule_frozen} latent(s) of a "
+                    f"{video_latent_length}-latent window; the branch needs a shorter overlap.")
+            branch_video_prefix = latent_branch_head.head_latents(
+                lambda _frames: self.vae.encode([_frames], VAE_tile_size)[0],
+                _rule_pixels, int(prefix_frames_count or 0), _rule_frozen,
+                stride=4, offset=1).to(dtype=self.target_dtype)
+            print(f"[WanGP][Ovi] The kept latents of the source latent file were decoded to the {int(_rule_pixels.shape[1])} frames of the head window: the head is the encode of those frames on this window's grid, and none of the file's latents are frozen.")
+        elif prefix_latents is not None:
             _prefix = torch.as_tensor(prefix_latents)
             if _prefix.dim() == 5:
                 _prefix = _prefix[0]
@@ -416,28 +476,12 @@ class OviFusionEngine:
             # responses.
             output["latent_file_obj"] = latent_file_obj
         if prefix_kept_windows is not None and int(prefix_kept_frames or 0) > 0:
-            # The branch job's kept region is a fresh decode of the source
-            # sidecar's kept windows (the same reconstruction the Latent
-            # Decode job performs), handed back as decoded_prefix so the job
-            # uses it as the output video's prefix instead of a
-            # re-extraction of the source video. Best effort: a decode that
-            # fails keeps the source-pixel prefix the job set up before the
-            # model call.
-            _vae_dtype = getattr(self.vae, "dtype", None) or torch.float32
-            def _decode_kept_window(spec):
-                _lat = spec["latents"].to(device=self.device, dtype=_vae_dtype)
-                _videos = self.vae.decode_to_cpu_uint8([_lat], VAE_tile_size)
-                if not _videos or _videos[0] is None:
-                    return None
-                return _videos[0].to("cpu")
-            try:
-                decoded_prefix = latent_io.decode_kept_windows(
-                    _decode_kept_window, prefix_kept_windows, int(prefix_kept_frames),
-                    is_i2v=bool(prefix_is_i2v))
-                if decoded_prefix is not None:
-                    output["decoded_prefix"] = decoded_prefix
-            except Exception as exc:
-                print(f"Latent branch: the kept region could not be decoded ({exc}); the output keeps the source-pixel prefix.")
+            # The kept region is the same decode the head window stood on, handed
+            # back as decoded_prefix so the output's prefix never comes from the
+            # source video.
+            decoded_prefix = _kept_region()
+            if decoded_prefix is not None:
+                output["decoded_prefix"] = decoded_prefix
         return output
 
 

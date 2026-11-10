@@ -1,6 +1,6 @@
 # Copyright (c) 2026 DeepBeepMeep - part of WanGP, WanGP Community License 2.0 (see LICENSE.txt)
 """The generate-form callbacks of the *From latent* (branch) mode, moved out of
-``wgp.py`` (the latent refactor, phase 3).
+``wgp.py``.
 
 The branch components' event handlers of the Generate tab: the *Location*
 radio handler (which also owns the branch components' visibility and
@@ -91,7 +91,7 @@ class BranchUi:
         # loop, the implicit Save Latents conversion) is gated on the same
         # conditions, so a job started there is neither refused by nor
         # affected by the hidden mode, and the setup is intact when the user
-        # comes back. The video label goes back to the legacy one whenever
+        # comes back. The video label reverts to its plain wording whenever
         # the mode does not apply.
         branch_available = any_video_source and latent_jobs._is_all_latent_family(self._jobs, self._ctx.get_base_model_type(self._ctx.get_state_model_type(state)), model_def)
         branch_on = branch_available and bool(branch_from_latent)
