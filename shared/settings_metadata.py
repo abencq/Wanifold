@@ -9,6 +9,11 @@ from shared import extra_settings
 _SLIDING = {
     "sliding_window_size", "sliding_window_overlap", "sliding_window_continuation_overlap", "sub_parallel_window_size", "sub_parallel_window_overlap",
     "sliding_window_color_correction_strength", "sliding_window_overlap_noise", "sliding_window_discard_last_frames", "sliding_window_trim_first_frames",
+    # Continuation Color Match belongs to the join between a video and the footage it continues,
+    # not to the cadence of the windows - hence its name. It travels with this group because the
+    # families that can continue a video are the families that slide, and the group decides which
+    # keys survive in a job's metadata.
+    "continuation_color_strength",
 }
 _AUDIO_POSTPROCESSING = {"postprocess_audio", "postprocess_audio_prompt", "postprocess_audio_neg_prompt"}
 _VISUAL_POSTPROCESSING = {"temporal_upsampling", "spatial_upsampling", "film_grain_intensity", "film_grain_saturation"}

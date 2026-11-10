@@ -173,6 +173,30 @@ def guide_to_float(video, memory_format=torch.preserve_format):
         return video
     return video.to(torch.float32, memory_format=memory_format).div_(torch.tensor(127.5, device=video.device)).sub_(1.0)
 
+def continuation_color_reference(strength, reference, frames):
+    """The frame a continuation's window is matched to: the last frame of the run it continues.
+
+    A path that already owns a reference - a start image, a guide video, a mask prefix - keeps it,
+    and an off strength asks for no frame at all, so nothing is decoded, copied or cast. The kept
+    run arrives either as uint8 (0-255) straight from a VAE decode, or already in guide levels from
+    a caller that normalized it; the answer is one frame in guide levels, and it is a copy: neither
+    the kept-run cache nor the caller's prefix tensor is aliased, so matching colors never retouches
+    the frames a job hands over.
+    """
+    if reference is not None:
+        return reference
+    try:
+        if float(strength or 0) <= 0.0:
+            return reference
+    except (TypeError, ValueError):
+        return reference
+    if not torch.is_tensor(frames) or frames.ndim < 2 or int(frames.shape[1]) < 1:
+        return reference
+    last = frames[:, -1:]
+    if last.dtype == torch.uint8:
+        return last.to(torch.float32).div_(torch.tensor(127.5, device=last.device)).sub_(1.0)
+    return last.detach().clone()
+
 def guide_to_dtype(video, dtype, chunk_frames=16):
     """A control video (C, T, H, W) in dtype with the values of guide_to_float, converted by chunks of frames: a uint8 guide does not go
     through a float32 copy of the whole video. Float videos are only cast."""

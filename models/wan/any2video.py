@@ -42,7 +42,7 @@ from shared.utils.vace_preprocessor import VaceVideoProcessor
 from shared.utils.basic_flowmatch import FlowMatchScheduler
 from shared.utils.euler_scheduler import EulerScheduler
 from shared.utils.lcm_scheduler import LCMScheduler
-from shared.utils.utils import get_outpainting_frame_location, resize_lanczos, calculate_new_dimensions, convert_image_to_tensor, convert_tensor_to_image, fit_image_into_canvas, guide_mask_to_float, guide_to_float
+from shared.utils.utils import get_outpainting_frame_location, resize_lanczos, calculate_new_dimensions, convert_image_to_tensor, convert_tensor_to_image, fit_image_into_canvas, guide_mask_to_float, guide_to_float, continuation_color_reference
 from .multitalk.multitalk_utils import MomentumBuffer, adaptive_projected_guidance, match_and_blend_colors, match_and_blend_colors_with_mask
 from .wanmove.trajectory import replace_feature, create_pos_feature_map
 from .alpha.utils import load_gauss_mask, apply_alpha_shift
@@ -518,6 +518,7 @@ class WanAny2V:
         apg_switch = False,
         speakers_bboxes = None,
         color_correction_strength = 1,
+        continuation_color_correction_strength = 0,
         prefix_frames_count = 0,
         image_mode = 0,
         window_no = 0,
@@ -2049,7 +2050,25 @@ class WanAny2V:
             x0 = [x[:,:1] for x in x0 ]
 
         any_vae2= self.vae2 is not None
-        needs_color_correction = color_correction_strength > 0 and (window_start_frame_no + prefix_frames_count) > 1
+        # A continuation hands its window a run of frames and claims no reference to match to, so
+        # the window comes back wearing whatever exposure the model happened to render and the join
+        # steps. The Continuation Color Match setting acts on that step. Its reference is the last
+        # frame of the run the window continues - the kept decode on a latent branch, the source's
+        # own frames on the classic path - which is what the engine already matches to where a
+        # prefix does declare itself (an inpaint prefix takes its last prefix frame, a guide video
+        # its last guide frame). The two routes that silence color_correction_strength are silent
+        # here too: an end frame means a shot transition, whose colors have nothing to carry on,
+        # and an HDR input ("&" in the video prompt type) carries its prefix in HDR levels, which
+        # the uint8 levels of a plain decode cannot speak.
+        _cont_cc_strength = float(continuation_color_correction_strength or 0) if (image_end is None and "&" not in video_prompt_type) else 0.0
+        _cont_cc_ref = None
+        if _cont_cc_strength > 0 and (window_start_frame_no + prefix_frames_count) > 1:
+            _cont_cc_ref = continuation_color_reference(
+                _cont_cc_strength, color_reference_frame,
+                _kept_region() if prefix_kept_windows is not None else prefix_video)
+        needs_color_correction = (
+            (color_correction_strength > 0 and (window_start_frame_no + prefix_frames_count) > 1)
+            or _cont_cc_ref is not None)
         videos = self.vae.decode_to_cpu_uint8(x0, VAE_tile_size)
         if any_vae2:
             videos2 = self.vae2.decode_to_cpu_uint8(x0, VAE_tile_size)
@@ -2072,8 +2091,20 @@ class WanAny2V:
                 # videos = match_and_blend_colors_with_mask(videos.unsqueeze(0), input_frames[0].unsqueeze(0), input_masks[0][:1].unsqueeze(0), color_correction_strength,copy_mode= "progressive_blend").squeeze(0)
                 videos = match_and_blend_colors_with_mask(videos.unsqueeze(0), input_frames[0].unsqueeze(0), input_masks[0][:1].unsqueeze(0), color_correction_strength,copy_mode= "reference").squeeze(0)
                 # videos = match_and_blend_colors_with_mask(videos.unsqueeze(0), videos.unsqueeze(0), input_masks[0][:1].unsqueeze(0), color_correction_strength,copy_mode= "reference").squeeze(0)
+            elif _cont_cc_ref is not None:
+                # Only the frames the model made are matched. The frames of the hand-off are the
+                # footage this window continues - or the model's own rebuild of them - and they are
+                # not the model's to recolour: repainting them would move the source footage instead
+                # of bringing the new segment to it.
+                _cc_head = 0 if image_outputs else min(int(prefix_frames_count or 0), max(0, int(videos.shape[1]) - 1))
+                _cc_made = videos[:, _cc_head:] if _cc_head > 0 else videos
+                _cc_made = match_and_blend_colors(_cc_made.unsqueeze(0), _cont_cc_ref.unsqueeze(0), _cont_cc_strength).squeeze(0)
+                videos = torch.cat([videos[:, :_cc_head], _cc_made], dim=1) if _cc_head > 0 else _cc_made
+                print(f"Continuation color match: {int(_cc_made.shape[1])} generated frame(s) matched to the last kept frame at strength {_cont_cc_strength:.2f}; the {int(_cc_head)} frame(s) of the hand-off keep the colors of the footage they continue.")
             elif color_reference_frame is not None:
                 videos = match_and_blend_colors(videos.unsqueeze(0), color_reference_frame.unsqueeze(0), color_correction_strength).squeeze(0)
+            elif color_correction_strength > 0:
+                print(f"Color correction: nothing to match this window to (no reference frame on this path), so its colors stay as the VAE decoded them - strength {float(color_correction_strength):.2f} is without effect here.")
             videos = videos.clamp_(-1, 1).add_(1.0).mul_(127.5).round_().clamp_(0, 255).to(torch.uint8)
 
         ret = { "x" : videos, "latent_slice" : latent_slice}

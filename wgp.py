@@ -7693,6 +7693,7 @@ def generate_media(
     sub_parallel_window_size,
     sub_parallel_window_overlap,
     sliding_window_color_correction_strength,
+    continuation_color_strength,
     sliding_window_overlap_noise,
     sliding_window_discard_last_frames,
     sliding_window_trim_first_frames,
@@ -8124,6 +8125,19 @@ def generate_media(
         sliding_window_overlap = continuation_head_frames
     else:
         continuation_head_frames = 0
+    # The colors a continued segment is matched to are a different question from the colors windows
+    # are matched to each other: a join is one pull onto footage made elsewhere, while a window to
+    # window match repeats down a long run and compounds. Continuation Color Match speaks for the
+    # join window alone, and only for the jobs that continue a video.
+    try:
+        continuation_color = float(continuation_color_strength or 0)
+    except (TypeError, ValueError):
+        continuation_color = 0.0
+    if not job_continues_video(video_source, branch_from_latent):
+        continuation_color = 0.0
+    if continuation_color > 0:
+        print(f"Continuation color match: the frames the first window generates will be matched to the last kept "
+              f"frame at strength {continuation_color:.2f}; the frames of the hand-off keep the colors of the footage they continue.")
     if sliding_window_overlap !=0:
         if sliding_window_defaults.get("overlap_default", 0) != sliding_window_overlap:
             overlap_offset = sliding_window_defaults.get("overlap_offset", 1)
@@ -9546,6 +9560,7 @@ def generate_media(
                     sub_parallel_window_size=sub_parallel_window_size,
                     sub_parallel_window_overlap=sub_parallel_window_overlap,
                     color_correction_strength = sliding_window_color_correction_strength,
+                    continuation_color_correction_strength = continuation_color if window_no == 1 else 0.0,
                     conditioning_latents_size = conditioning_latents_size,
                     input_video_is_hdr=input_video_is_hdr,
                     lora_dir=lora_dir,
@@ -12337,6 +12352,7 @@ def save_inputs(
             sub_parallel_window_size,
             sub_parallel_window_overlap,
             sliding_window_color_correction_strength,
+            continuation_color_strength,
             sliding_window_overlap_noise,
             sliding_window_discard_last_frames,
             sliding_window_trim_first_frames,
@@ -14640,6 +14656,7 @@ def generate_media_tab(update_form = False, state_dict = None, ui_defaults = Non
                             sub_parallel_window_size = setting_slider("sub_parallel_window_size", value=ui_get("sub_parallel_window_size", 0))
                             sub_parallel_window_overlap = setting_slider("sub_parallel_window_overlap", value=ui_get("sub_parallel_window_overlap", 17))
                         sliding_window_continuation_overlap = setting_slider("sliding_window_continuation_overlap", value=ui_get("sliding_window_continuation_overlap", 5))
+                        continuation_color_strength = setting_slider("continuation_color_strength", value=ui_get("continuation_color_strength", 0))
                         sliding_window_trim_first_frames = setting_slider("sliding_window_trim_first_frames", value=ui_get("sliding_window_trim_first_frames", 0))
 
                         video_prompt_type_alignment = gr.Dropdown(

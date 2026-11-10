@@ -1442,6 +1442,10 @@ class family_handler():
 
         if test_oneframe_overlap(base_model_type):
             ui_defaults["sliding_window_overlap"] = 1
+            # The interface default rather than the saved one. A one-frame handoff leaves this
+            # match little to work on between windows, and on a job that continues a video it has
+            # nothing at all to match to: the setting that acts on a join is Continuation Color
+            # Match (docs/SETTINGS.md).
             ui_defaults["sliding_window_color_correction_strength"]= 0
 
         if test_multitalk(base_model_type):
