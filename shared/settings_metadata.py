@@ -7,7 +7,7 @@ from shared import extra_settings
 
 
 _SLIDING = {
-    "sliding_window_size", "sliding_window_overlap", "sub_parallel_window_size", "sub_parallel_window_overlap",
+    "sliding_window_size", "sliding_window_overlap", "sliding_window_continuation_overlap", "sub_parallel_window_size", "sub_parallel_window_overlap",
     "sliding_window_color_correction_strength", "sliding_window_overlap_noise", "sliding_window_discard_last_frames", "sliding_window_trim_first_frames",
 }
 _AUDIO_POSTPROCESSING = {"postprocess_audio", "postprocess_audio_prompt", "postprocess_audio_neg_prompt"}

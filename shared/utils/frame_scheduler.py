@@ -178,6 +178,38 @@ def _floor_overlap(frame_count: int, step: int, offset: int) -> int:
     return 0 if frame_count < offset else (frame_count - offset) // step * step + offset
 
 
+def continuation_window_overlap(window_overlap, continuation_overlap, *, continuing):
+    """The overlap (in frames) a job really hands from one window to the next.
+
+    A window that continues a picture only inherits what it looks like when the
+    handoff is a single frame: one frame carries no speed and no direction, so
+    each window restarts the motion where the previous one stopped it. Several
+    families pin their Windows Frames Overlap to that single frame because a
+    plain long generation reads best with the bare minimum of handoff; a
+    continuation is the opposite case, and the Continuation Overlap setting lifts
+    the handoff for it.
+
+    The lift is a maximum, never a reduction: a family that already overlaps
+    generously keeps its own value, and a job that continues nothing (or leaves
+    the setting at 0) runs with the overlap it was given.
+    """
+    try:
+        requested = int(continuation_overlap or 0)
+    except (TypeError, ValueError):
+        requested = 0
+    overlap = int(window_overlap or 0)
+    return max(overlap, requested) if continuing and requested > 0 else overlap
+
+
+def job_continues_video(video_source, branch_from_latent=False):
+    """Whether a job starts from a run of frames it must keep moving from: a
+    Video Source, or the kept region of a WanGP latent file. A start image is not
+    a continuation - it is a single frame, and there is no motion to inherit."""
+    if isinstance(video_source, (list, tuple)):
+        video_source = video_source[0] if len(video_source) > 0 else None
+    return (video_source is not None and len(str(video_source or "").strip()) > 0) or bool(branch_from_latent)
+
+
 def resolve_window_geometry(output_frames: int, overlap_frames: int, discard_last_frames: int, minimum: int, step: int, *, frame_offset: int = 1, overlap_offset: int = 1, max_overlap: int | None = None, available_overlap: int | None = None, preserve_exact_output_frames: bool = False, output_frame_policy: str | None = None) -> dict:
     output_frames = max(1, int(output_frames))
     overlap_frames = max(0, int(overlap_frames))

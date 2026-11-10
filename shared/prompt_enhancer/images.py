@@ -4,7 +4,7 @@
 from dataclasses import dataclass
 
 from shared.remote_llm import is_remote_engine, resolve_role_engine
-from shared.utils.frame_scheduler import SLASH_BLOCK_RE, build_default_window_plan, build_frame_scheduler, fit_video_length, floor_frame_count
+from shared.utils.frame_scheduler import SLASH_BLOCK_RE, build_default_window_plan, build_frame_scheduler, continuation_window_overlap, fit_video_length, floor_frame_count, job_continues_video
 
 
 MULTI_IMAGE_PROMPT_ENHANCEMENT = True
@@ -195,11 +195,18 @@ def window_plan(prompts, inputs, model_def, *, fps, source_frames, has_start):
     latent_size, offset = model_def.get("latent_size", step), model_def.get("frames_offset", 1)
     total_frames = fit_video_length(inputs["video_length"], minimum, latent_size, offset)
     window_size = floor_frame_count(inputs["sliding_window_size"], minimum, latent_size, offset)
-    default_overlap = min(window_size - latent_size, inputs["sliding_window_overlap"])
+    # A continuation lifts the handoff from one window to the next (the Continuation
+    # Overlap setting), so the enhancer numbers each window's frames on the plan the job
+    # really runs, as validate_settings and generate_media do.
+    overlap = continuation_window_overlap(
+        inputs["sliding_window_overlap"], inputs.get("sliding_window_continuation_overlap", 0),
+        continuing=job_continues_video(inputs.get("video_source"), inputs.get("branch_latent_file")),
+    )
+    default_overlap = min(window_size - latent_size, overlap)
     defaults = model_def.get("sliding_window_defaults", {})
     discard = inputs["sliding_window_discard_last_frames"]
     geometry = dict(minimum=minimum, step=step, frame_offset=offset, overlap_offset=defaults.get("overlap_offset", 1), max_overlap=defaults.get("overlap_max"), preserve_exact_output_frames=model_def.get("image_end_frame_position", False), output_frame_policy=model_def.get("frame_scheduler_output_policy"))
-    scheduler, error = build_frame_scheduler(prompts, total_frames=total_frames, fps=fps, window_size=window_size, default_overlap=inputs["sliding_window_overlap"], supported_model_commands=model_def.get("prompt_slash_commands", []), allow_new_shot="T" in model_def.get("image_prompt_types_allowed", ""), first_window_overlap_frames=source_frames, initial_shared_frames=int(source_frames > 0), discard_last_frames=discard, **geometry)
+    scheduler, error = build_frame_scheduler(prompts, total_frames=total_frames, fps=fps, window_size=window_size, default_overlap=overlap, supported_model_commands=model_def.get("prompt_slash_commands", []), allow_new_shot="T" in model_def.get("image_prompt_types_allowed", ""), first_window_overlap_frames=source_frames, initial_shared_frames=int(source_frames > 0), discard_last_frames=discard, **geometry)
     if error is not None:
         raise ValueError(error)
     if scheduler["active"]:

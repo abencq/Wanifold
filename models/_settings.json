@@ -91,6 +91,7 @@
 	"motion_amplitude": 1.0,
 	"sliding_window_size": 129,
 	"sliding_window_overlap": 5,
+	"sliding_window_continuation_overlap": 5,
 	"sub_parallel_window_size": 0,
 	"sub_parallel_window_overlap": 17,
 	"sliding_window_color_correction_strength": 0,

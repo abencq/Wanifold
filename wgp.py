@@ -166,7 +166,7 @@ from shared.utils.settings_bundle import is_wangp_settings_filename
 from shared.utils.video_decode import decode_video_frames_ffmpeg, probe_video_stream_metadata
 from shared.utils.video_metadata import extract_source_images  # also a plugin global (Queue Editor)
 from shared.utils.virtual_media import get_virtual_image, get_virtual_media_entry, get_virtual_media_vsource, media_source_exists, parse_virtual_media_path, replace_virtual_media_source, strip_virtual_media_suffix
-from shared.utils.frame_scheduler import SLASH_BLOCK_RE, build_default_window_plan, build_extension_window, build_frame_scheduler, fit_video_length, floor_frame_count, has_slash_commands, normalize_frame_count, set_video_length_rounding, prepare_loras_mult_windows, resolve_window_geometry
+from shared.utils.frame_scheduler import SLASH_BLOCK_RE, build_default_window_plan, build_extension_window, build_frame_scheduler, continuation_window_overlap, fit_video_length, floor_frame_count, has_slash_commands, job_continues_video, normalize_frame_count, set_video_length_rounding, prepare_loras_mult_windows, resolve_window_geometry
 from shared.match_archi import match_nvidia_architecture
 from shared.attention import ATTENTION_MODE_AVAILABILITY, get_attention_modes, get_supported_attention_modes, get_default_attention_mode, get_override_attention_modes, get_supported_override_attention_modes
 from shared.utils.utils import truncate_for_filesystem, sanitize_file_name, process_images_multithread, get_default_workers, resize_lanczos_frames, expand_or_shrink_mask, prepare_binary_mask_frame, filter_letters, add_to_sequence, del_in_sequence
@@ -1251,6 +1251,13 @@ def validate_settings(state, model_type, single_prompt, inputs, silent=False):
     validation_prompts = prompts
     frames_minimum, frames_steps, latent_size = get_model_min_frames_and_step(model_type)
     discard_step = model_def.get("sliding_window_defaults", {}).get("discard_step", latent_size)  # 1 for models that recycle no latents
+    # The overlap the job really hands from window to window: a continuation lifts it so each
+    # window inherits the motion of the frames it continues, not just their appearance.
+    job_overlap = continuation_window_overlap(
+        inputs.get("sliding_window_overlap", 0),
+        inputs.get("sliding_window_continuation_overlap", 0),
+        continuing=job_continues_video(inputs.get("video_source"), inputs.get("branch_latent_file")),
+    )
     inputs.pop("frame_scheduler", None)
     frame_scheduler = None
     scheduler_supported = frame_scheduler_supported(model_type, model_def, inputs.get("image_mode", 0), is_edit_mode)
@@ -1263,7 +1270,7 @@ def validate_settings(state, model_type, single_prompt, inputs, silent=False):
             total_frames=int(inputs.get("video_length", frames_minimum) or frames_minimum),
             fps=float(schedule_fps),
             window_size=int(inputs.get("sliding_window_size", inputs.get("video_length", frames_minimum)) or frames_minimum),
-            default_overlap=int(inputs.get("sliding_window_overlap", 0) or 0),
+            default_overlap=job_overlap,
             minimum=frames_minimum,
             step=frames_steps,
             frame_offset=model_def.get("frames_offset", 1),
@@ -1371,7 +1378,7 @@ def validate_settings(state, model_type, single_prompt, inputs, silent=False):
     masking_strength= inputs["masking_strength"]     
     input_video_strength = inputs.get("input_video_strength", 1.0)
     sliding_window_size = inputs["sliding_window_size"]
-    sliding_window_overlap = inputs["sliding_window_overlap"]
+    sliding_window_overlap = job_overlap
     sliding_window_discard_last_frames = inputs["sliding_window_discard_last_frames"]
     video_length = inputs["video_length"]
     num_inference_steps= inputs["num_inference_steps"]
@@ -7682,6 +7689,7 @@ def generate_media(
     speakers_locations,
     sliding_window_size,
     sliding_window_overlap,
+    sliding_window_continuation_overlap,
     sub_parallel_window_size,
     sub_parallel_window_overlap,
     sliding_window_color_correction_strength,
@@ -8102,6 +8110,20 @@ def generate_media(
     if sliding_window_size !=0:
         sliding_window_size = floor_frame_count(sliding_window_size, frames_minimum, latent_size, frames_offset)
     sliding_window_defaults = model_def.get("sliding_window_defaults", {})
+    # A window that continues a video inherits a run of frames, not a picture: at a one-frame
+    # handoff it reads the last frame's appearance and none of where it was going, so motion
+    # restarts at every junction. Continuation Overlap lifts the handoff for the jobs that
+    # continue a video and leaves every other job alone.
+    continuation_head_frames = continuation_window_overlap(
+        sliding_window_overlap, sliding_window_continuation_overlap,
+        continuing=job_continues_video(video_source, branch_from_latent))
+    if continuation_head_frames > int(sliding_window_overlap or 0):
+        print(f"Continuation: each window now inherits {continuation_head_frames} frames of the video it continues, "
+              f"instead of the {int(sliding_window_overlap or 0)} of the Windows Frames Overlap setting: one frame "
+              f"carries no motion, so a window would otherwise restart where the previous one stopped.")
+        sliding_window_overlap = continuation_head_frames
+    else:
+        continuation_head_frames = 0
     if sliding_window_overlap !=0:
         if sliding_window_defaults.get("overlap_default", 0) != sliding_window_overlap:
             overlap_offset = sliding_window_defaults.get("overlap_offset", 1)
@@ -8964,7 +8986,13 @@ def generate_media(
                     if fit_crop or "L" in image_prompt_type: refresh_preview["video_source"] = convert_tensor_to_image(prefix_video, 0) 
 
                     new_height, new_width = prefix_video.shape[-2:]
-                    source_overlap = 0 if new_shot else min(prefix_video.shape[1], reuse_frames if reuse_frames > 0 else 1)
+                    # The frames of the run this window continues that the model reads as its
+                    # history. A sliding-window job already carries the (possibly lifted) window
+                    # overlap; a single-window job carries one frame unless the setting asks for more.
+                    _head_history = reuse_frames if reuse_frames > 0 else 1
+                    if continuation_head_frames > 0 and reuse_frames == 0:
+                        _head_history = continuation_head_frames
+                    source_overlap = 0 if new_shot else min(prefix_video.shape[1], _head_history)
                     if source_overlap > 0:
                         pre_video_guide = prefix_video[:, -source_overlap:].float()
                         if prefix_video_is_hdr:
@@ -12305,6 +12333,7 @@ def save_inputs(
             speakers_locations,
             sliding_window_size,
             sliding_window_overlap,
+            sliding_window_continuation_overlap,
             sub_parallel_window_size,
             sub_parallel_window_overlap,
             sliding_window_color_correction_strength,
@@ -14610,6 +14639,7 @@ def generate_media_tab(update_form = False, state_dict = None, ui_defaults = Non
                         with gr.Row(visible=model_def.get("sub_parallel_windows", False)) as sub_parallel_window_row:
                             sub_parallel_window_size = setting_slider("sub_parallel_window_size", value=ui_get("sub_parallel_window_size", 0))
                             sub_parallel_window_overlap = setting_slider("sub_parallel_window_overlap", value=ui_get("sub_parallel_window_overlap", 17))
+                        sliding_window_continuation_overlap = setting_slider("sliding_window_continuation_overlap", value=ui_get("sliding_window_continuation_overlap", 5))
                         sliding_window_trim_first_frames = setting_slider("sliding_window_trim_first_frames", value=ui_get("sliding_window_trim_first_frames", 0))
 
                         video_prompt_type_alignment = gr.Dropdown(

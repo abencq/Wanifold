@@ -374,6 +374,23 @@ def _sliding_window_overlap_bound(bound: str, fallback: int) -> _Resolver:
     return resolver
 
 
+def _continuation_overlap_max(model_def: dict[str, Any] | None, _context: dict[str, Any]) -> int:
+    """Ceiling of the Continuation Overlap slider.
+
+    The Windows Frames Overlap ceiling is no use here: several families pin it to
+    a single frame (``wan_handler.test_oneframe_overlap``) precisely because an
+    ordinary long generation reads best with the bare minimum of handoff, and
+    that is the case this setting exists to lift. So the ceiling is the family's
+    own one when it is generous, and 97 frames otherwise.
+    """
+    defaults = _sliding_window_defaults(model_def)
+    try:
+        raw_max = int(defaults.get("overlap_max", 0))
+    except Exception:
+        raw_max = 0
+    return max(97, raw_max)
+
+
 def _temperature_visible(model_def: dict[str, Any]) -> bool:
     return bool(model_def.get("audio_only", False)) and bool(model_def.get("temperature", True))
 
@@ -560,6 +577,7 @@ _add_setting("attention_sparsity", _model_setting_label("attention_sparsity", "A
 _add_setting("image_refs_relative_size", _model_setting_label("image_refs_relative_size", "Rescale Internaly Image Ref (% in relation to Output Video) to change Output Composition"), "integer", min=_model_setting_bound("image_refs_relative_size", "min", 20), max=_model_setting_bound("image_refs_relative_size", "max", 100), step=_model_setting_bound("image_refs_relative_size", "step", 1), visible=_show_if_flag("any_image_refs_relative_size"))
 _add_setting("sliding_window_size", "Sliding Window Size", "integer", min=_sliding_window_size_min, max=_sliding_window_size_max, step=_sliding_window_size_step, visible=_show_if(_sliding_window_visible))
 _add_setting("sliding_window_overlap", "Windows Frames Overlap (needed to maintain continuity between windows, a higher value will require more windows)", "integer", min=_sliding_window_overlap_bound("overlap_min", 1), max=_sliding_window_overlap_bound("overlap_max", 97), step=_sliding_window_overlap_bound("overlap_step", 4), visible=_show_if(_sliding_window_visible))
+_add_setting("sliding_window_continuation_overlap", "Continuation Overlap: frames of motion history handed to every window of a video you continue or branch from (0 = use the Windows Frames Overlap)", "integer", min=0, max=_continuation_overlap_max, step=1, visible=_show_if(_sliding_window_visible))
 _add_setting("sub_parallel_window_size", "Sub Parallel Window Size (0 = disabled)", "integer", min=0, max=_sliding_window_size_max, step=_sliding_window_size_step, visible=_show_if_flag("sub_parallel_windows"))
 _add_setting("sub_parallel_window_overlap", "Sub Parallel Window Overlap", "integer", min=_sliding_window_overlap_bound("overlap_min", 1), max=_sliding_window_overlap_bound("overlap_max", 97), step=_sliding_window_overlap_bound("overlap_step", 4), visible=_show_if_flag("sub_parallel_windows"))
 _add_setting("sliding_window_color_correction_strength", "Color Correction Strength (match colors of new window with previous one, 0 = disabled)", "number", min=0.0, max=1.0, step=0.01, visible=_show_if_flag("color_correction"))
