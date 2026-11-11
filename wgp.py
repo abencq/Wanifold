@@ -166,7 +166,7 @@ from shared.utils.settings_bundle import is_wangp_settings_filename
 from shared.utils.video_decode import decode_video_frames_ffmpeg, probe_video_stream_metadata
 from shared.utils.video_metadata import extract_source_images  # also a plugin global (Queue Editor)
 from shared.utils.virtual_media import get_virtual_image, get_virtual_media_entry, get_virtual_media_vsource, media_source_exists, parse_virtual_media_path, replace_virtual_media_source, strip_virtual_media_suffix
-from shared.utils.frame_scheduler import SLASH_BLOCK_RE, build_default_window_plan, build_extension_window, build_frame_scheduler, continuation_window_overlap, fit_video_length, floor_frame_count, has_slash_commands, job_continues_video, normalize_frame_count, set_video_length_rounding, prepare_loras_mult_windows, resolve_window_geometry
+from shared.utils.frame_scheduler import SLASH_BLOCK_RE, align_overlap, build_default_window_plan, build_extension_window, build_frame_scheduler, continuation_source_shortfall, continuation_window_overlap, continuation_window_shortfall, fit_video_length, floor_frame_count, has_slash_commands, job_continues_video, normalize_frame_count, resolve_continuation_handoff, set_video_length_rounding, prepare_loras_mult_windows, resolve_window_geometry
 from shared.match_archi import match_nvidia_architecture
 from shared.attention import ATTENTION_MODE_AVAILABILITY, get_attention_modes, get_supported_attention_modes, get_default_attention_mode, get_override_attention_modes, get_supported_override_attention_modes
 from shared.utils.utils import truncate_for_filesystem, sanitize_file_name, process_images_multithread, get_default_workers, resize_lanczos_frames, expand_or_shrink_mask, prepare_binary_mask_frame, filter_letters, add_to_sequence, del_in_sequence
@@ -1258,6 +1258,11 @@ def validate_settings(state, model_type, single_prompt, inputs, silent=False):
         inputs.get("sliding_window_continuation_overlap", 0),
         continuing=job_continues_video(inputs.get("video_source"), inputs.get("branch_latent_file")),
     )
+    if job_overlap > int(inputs.get("sliding_window_overlap", 0) or 0):
+        # A lifted handoff is a whole number of latent frames by the time the job runs it - the
+        # inherited frames are re-denoised inside the window's own block - so the window plan
+        # checked here has to be the one the job will build, not the one the setting describes.
+        job_overlap = align_overlap(job_overlap, latent_size, model_def.get("sliding_window_defaults", {}).get("overlap_offset", 1))
     inputs.pop("frame_scheduler", None)
     frame_scheduler = None
     scheduler_supported = frame_scheduler_supported(model_type, model_def, inputs.get("image_mode", 0), is_edit_mode)
@@ -8112,20 +8117,38 @@ def generate_media(
     if sliding_window_size !=0:
         sliding_window_size = floor_frame_count(sliding_window_size, frames_minimum, latent_size, frames_offset)
     sliding_window_defaults = model_def.get("sliding_window_defaults", {})
+    overlap_offset = sliding_window_defaults.get("overlap_offset", 1)
     # A window that continues a video inherits a run of frames, not a picture: at a one-frame
     # handoff it reads the last frame's appearance and none of where it was going, so motion
     # restarts at every junction. Continuation Overlap lifts the handoff for the jobs that
     # continue a video and leaves every other job alone.
-    continuation_head_frames = continuation_window_overlap(
+    # The lift is brought onto the model's latent grid here, where the job log can say what became
+    # of it: the inherited frames are re-denoised inside the window's own latent block, so only a
+    # whole number of latent frames can be handed over, and a Continuation Overlap of 15 on a
+    # 4-frame grid really means 13. Announcing the number before that floor - which is what this
+    # used to do - had the log promise a handoff the job then never ran.
+    _handoff = resolve_continuation_handoff(
         sliding_window_overlap, sliding_window_continuation_overlap,
+        step=latent_size, offset=overlap_offset,
         continuing=job_continues_video(video_source, branch_from_latent))
-    if continuation_head_frames > int(sliding_window_overlap or 0):
-        print(f"Continuation: each window now inherits {continuation_head_frames} frames of the video it continues, "
-              f"instead of the {int(sliding_window_overlap or 0)} of the Windows Frames Overlap setting: one frame "
-              f"carries no motion, so a window would otherwise restart where the previous one stopped.")
+    continuation_head_frames = _handoff["head"]
+    _grid_words = (f"in steps of {latent_size} from frame {overlap_offset}" if overlap_offset
+                   else f"in whole latent frames of {latent_size}")
+    # A latent branch hands its first window the kept region of the latent file rather than this
+    # number, so the promise is made only about the windows the setting really reaches.
+    _window_words = "every window after the first" if branch_from_latent else "each window"
+    if continuation_head_frames > 0:
+        _moved_words = (
+            f" (the {_handoff['requested']} the setting holds lands on {continuation_head_frames}: only handoffs "
+            f"{_grid_words} can be denoised)" if _handoff["snapped"] else "")
+        print(f"Continuation: {_window_words} now inherits {continuation_head_frames} frames of the video it "
+              f"continues{_moved_words}, instead of the {_handoff['window_overlap']} of the Windows Frames Overlap "
+              f"setting: one frame carries no motion, so a window would otherwise restart where the previous one stopped.")
         sliding_window_overlap = continuation_head_frames
-    else:
-        continuation_head_frames = 0
+    elif _handoff["vacuous"]:
+        print(f"Continuation: the Continuation Overlap of {_handoff['requested']} changes nothing here: it lands on "
+              f"{align_overlap(_handoff['requested'], latent_size, overlap_offset)}, the handoff the Windows Frames "
+              f"Overlap already gives, because this model counts handoffs {_grid_words}.")
     # The colors a continued segment is matched to are a different question from the colors windows
     # are matched to each other, and both are a different question again from *which frame* those
     # colors are read from. The strength says how hard the pull is; the anchor says where it pulls
@@ -8153,8 +8176,7 @@ def generate_media(
               f"the hand-off keep the colors of the footage they continue.")
     if sliding_window_overlap !=0:
         if sliding_window_defaults.get("overlap_default", 0) != sliding_window_overlap:
-            overlap_offset = sliding_window_defaults.get("overlap_offset", 1)
-            sliding_window_overlap = sliding_window_overlap // latent_size * latent_size if overlap_offset == 0 else (sliding_window_overlap - overlap_offset) // latent_size * latent_size + overlap_offset
+            sliding_window_overlap = align_overlap(sliding_window_overlap, latent_size, overlap_offset)
     sub_parallel_window_size = max(0, int(sub_parallel_window_size or 0))
     if sub_parallel_window_size !=0:
         sub_parallel_window_size += 1
@@ -8379,6 +8401,17 @@ def generate_media(
     gen_state = {}
     frame_scheduler = None
     first_window_available_overlap = estimate_first_window_overlap_frames(None if fake_start_image else image_start, video_source, parsed_keep_frames_video_source, fps)
+    # A window cannot inherit more frames than the footage it continues holds, and that footage is
+    # counted after its own frame rate is matched to the job's, so a 48 fps video continued at
+    # 24 fps offers half the frames it has samples of. The planner has always clamped the handoff
+    # to what is there; what it never did was say so, which left a Continuation Overlap wider than
+    # the video looking in the log exactly like the handoff that ran.
+    if continuation_head_frames > 0 and video_source is not None:
+        _source_shortfall = continuation_source_shortfall(continuation_head_frames, first_window_available_overlap)
+        if _source_shortfall is not None:
+            print(f"Continuation: the video being continued offers {_source_shortfall} frames at {fps} fps, so each "
+                  f"window inherits {_source_shortfall} of them rather than the {continuation_head_frames} the "
+                  f"setting asks for: a handoff cannot be longer than the footage it continues.")
     scheduler_supported = frame_scheduler_supported(model_type, model_def, image_mode)
     if not scheduler_supported and has_slash_commands(prompts):
         raise gr.Error("Prompt slash window commands require a video model with Sliding Window support.")
@@ -8631,6 +8664,23 @@ def generate_media(
     default_windows_template, branch_prefix, sliding_window = _plan["default_windows_template"], _plan["branch_prefix"], _plan["sliding_window"]
     if _plan["refusal"]:
         raise gr.Error(_plan["refusal"])
+    # The window is the last thing that can move the handoff, and until here it moved it quietly.
+    # The frames a window inherits live inside the window and are re-denoised there, so the
+    # window's own size bounds the handoff - and a wide handoff is paid for in windows rather than
+    # for free. Both facts were arithmetic in the planner and invisible in the log.
+    if continuation_head_frames > 0 and any_sliding_window:
+        _window_shortfall = continuation_window_shortfall(continuation_head_frames, sliding_window_size, latent_size)
+        _ran_head = _window_shortfall if _window_shortfall is not None else default_reuse_frames
+        if _window_shortfall is not None:
+            print(f"Continuation: a {int(sliding_window_size)}-frame window leaves room for at most "
+                  f"{_window_shortfall} inherited frames, so each window inherits {_window_shortfall} and not "
+                  f"{continuation_head_frames}; a wider Sliding Window Size is how to inherit more.")
+        if _ran_head > 0 and _ran_head * 2 >= int(sliding_window_size):
+            _plan_windows = len(scheduled_windows_template) if scheduler_active else len(default_windows_template)
+            _new_each = max(1, int(sliding_window_size) - int(_ran_head))
+            print(f"Continuation: {_ran_head} of every {int(sliding_window_size)} window frames are the handoff, and a "
+                  f"window re-generates those frames instead of only reading them: the job runs in {_plan_windows} "
+                  f"window{'' if _plan_windows == 1 else 's'} of about {_new_each} new frames.")
     seed = set_seed(seed)
 
     torch.set_grad_enabled(False) 
@@ -14696,7 +14746,15 @@ def generate_media_tab(update_form = False, state_dict = None, ui_defaults = Non
                         with gr.Row(visible=model_def.get("sub_parallel_windows", False)) as sub_parallel_window_row:
                             sub_parallel_window_size = setting_slider("sub_parallel_window_size", value=ui_get("sub_parallel_window_size", 0))
                             sub_parallel_window_overlap = setting_slider("sub_parallel_window_overlap", value=ui_get("sub_parallel_window_overlap", 17))
-                        sliding_window_continuation_overlap = setting_slider("sliding_window_continuation_overlap", value=ui_get("sliding_window_continuation_overlap", 5))
+                        # The control is bound to the model's handoff grid: it steps in whole latent
+                        # frames from the family's first legal one. The validated range still admits 0,
+                        # because a settings file or an API call may say "no lift", but the control
+                        # itself starts where the model can denoise, and an off-grid stored value is
+                        # offered as the nearest one it can.
+                        _cont_ov_grid = extra_settings.continuation_overlap_grid(model_def)
+                        sliding_window_continuation_overlap = setting_slider(
+                            "sliding_window_continuation_overlap", minimum=_cont_ov_grid[0],
+                            value=extra_settings.continuation_overlap_value(model_def, ui_get("sliding_window_continuation_overlap", 5)))
                         continuation_color_strength = setting_slider("continuation_color_strength", value=ui_get("continuation_color_strength", 0))
                         continuation_color_anchor = setting_choice(
                             "continuation_color_anchor",

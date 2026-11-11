@@ -374,6 +374,98 @@ def _sliding_window_overlap_bound(bound: str, fallback: int) -> _Resolver:
     return resolver
 
 
+def _continuation_overlap_offset(model_def: dict[str, Any] | None) -> int:
+    """Where this family's handoff series starts counting from (``overlap_offset``)."""
+    defaults = _sliding_window_defaults(model_def)
+    try:
+        return max(0, int(defaults.get("overlap_offset", 1)))
+    except Exception:
+        return 1
+
+
+def continuation_overlap_grid(model_def: dict[str, Any] | None) -> tuple[int, int, int]:
+    """(minimum, maximum, step) of the Continuation Overlap control for one family.
+
+    The frames a window inherits are re-denoised inside the window's own latent
+    block, so a handoff exists only in whole latent frames: the control has to
+    step the way the model divides them, or it offers numbers the job cannot use
+    and quietly rewrites. Wan 2.2 hands off 1, 5, 9, 13 ...; LTX2 steps by 8; an
+    offset-0 family such as SVI2 Pro counts 4, 8, 12 from zero.
+
+    The family's own overlap bounds describe that grid when it declares them:
+    ``overlap_step`` is the stride, ``overlap_min`` and ``overlap_offset`` where
+    the series starts. Several families set ``overlap_step`` to 0 because their
+    range is a single value, so the stride falls back to the latent size the same
+    way ``wgp.py:3286`` does. The ceiling starts at the generous
+    ``_continuation_overlap_max`` - a family that pins its own overlap to a single
+    frame is precisely the case this setting exists to lift - and is then brought
+    back down onto the grid. A ceiling that sits between two handoffs is the same
+    dishonesty one down: the control offers a number, and the job floors it the
+    moment it runs. Ovi divides a window in blocks of 120 frames, so one handoff
+    survives that rule for it, and the control says so rather than offering 97.
+    """
+    defaults = _sliding_window_defaults(model_def)
+    offset = _continuation_overlap_offset(model_def)
+    try:
+        stride = int((model_def or {}).get("latent_size", (model_def or {}).get("frames_steps", 4)) or 4)
+    except Exception:
+        stride = 4
+    stride = max(1, stride)
+    try:
+        step = int(defaults.get("overlap_step", 0))
+    except Exception:
+        step = 0
+    if step <= 0:
+        step = stride
+    try:
+        low = int(defaults.get("overlap_min", 0))
+    except Exception:
+        low = 0
+    if low <= 0:
+        low = offset if offset > 0 else step
+    low = max(1, low)
+    base = offset if offset > 0 else 0
+    high = _continuation_overlap_max(model_def, {})
+    if high > base:
+        high = base + step * ((high - base) // step)
+    return low, max(low, high), max(1, step)
+
+
+def continuation_overlap_value(model_def: dict[str, Any] | None, value: Any, default: int = 5) -> int:
+    """The Continuation Overlap to offer for ``value``, on the family's own grid.
+
+    The control steps in whole latent frames, but a settings file written before
+    that - or a queue payload - can still carry a number this model cannot
+    denoise, and a control showing such a number describes a handoff the job will
+    never run. A stored 0 meant "leave the handoff alone"; the smallest value on
+    the grid means the same thing on every family, because a handoff at or below
+    the Windows Frames Overlap lifts nothing, so an old 0 is offered as that
+    rather than as a value the slider cannot sit on.
+    """
+    low, high, step = continuation_overlap_grid(model_def)
+    offset = _continuation_overlap_offset(model_def)
+    try:
+        value = int(value)
+    except (TypeError, ValueError):
+        value = int(default)
+    if value <= 0:
+        return low
+    # The floor the planner applies to a handoff (``frame_scheduler.align_overlap``): a handoff
+    # is stored as whole latent frames, so 15 on a 4-frame grid means 13. This module stays free
+    # of imports from the engine, so the arithmetic is restated here and the test suite pins the
+    # two against each other value by value.
+    value = min(value, high)
+    if offset:
+        aligned = offset if value < offset else (value - offset) // step * step + offset
+    else:
+        aligned = value // step * step
+    return max(low, aligned)
+
+
+def _continuation_overlap_step(model_def: dict[str, Any] | None, _context: dict[str, Any]) -> int:
+    return continuation_overlap_grid(model_def)[2]
+
+
 def _continuation_overlap_max(model_def: dict[str, Any] | None, _context: dict[str, Any]) -> int:
     """Ceiling of the Continuation Overlap slider.
 
@@ -577,7 +669,7 @@ _add_setting("attention_sparsity", _model_setting_label("attention_sparsity", "A
 _add_setting("image_refs_relative_size", _model_setting_label("image_refs_relative_size", "Rescale Internaly Image Ref (% in relation to Output Video) to change Output Composition"), "integer", min=_model_setting_bound("image_refs_relative_size", "min", 20), max=_model_setting_bound("image_refs_relative_size", "max", 100), step=_model_setting_bound("image_refs_relative_size", "step", 1), visible=_show_if_flag("any_image_refs_relative_size"))
 _add_setting("sliding_window_size", "Sliding Window Size", "integer", min=_sliding_window_size_min, max=_sliding_window_size_max, step=_sliding_window_size_step, visible=_show_if(_sliding_window_visible))
 _add_setting("sliding_window_overlap", "Windows Frames Overlap (needed to maintain continuity between windows, a higher value will require more windows)", "integer", min=_sliding_window_overlap_bound("overlap_min", 1), max=_sliding_window_overlap_bound("overlap_max", 97), step=_sliding_window_overlap_bound("overlap_step", 4), visible=_show_if(_sliding_window_visible))
-_add_setting("sliding_window_continuation_overlap", "Continuation Overlap: frames of motion history handed to every window of a video you continue or branch from (0 = use the Windows Frames Overlap)", "integer", min=0, max=_continuation_overlap_max, step=1, visible=_show_if(_sliding_window_visible))
+_add_setting("sliding_window_continuation_overlap", "Continuation Overlap: frames of motion history handed to every window of a video you continue or branch from. The slider steps in this model's whole latent frames (Wan 2.2: 1, 5, 9, 13 ...); a value at or below the Windows Frames Overlap lifts nothing, and because those frames are re-generated inside each window, keep it well below the Sliding Window Size", "integer", min=0, max=_continuation_overlap_max, step=_continuation_overlap_step, visible=_show_if(_sliding_window_visible))
 _add_setting("sub_parallel_window_size", "Sub Parallel Window Size (0 = disabled)", "integer", min=0, max=_sliding_window_size_max, step=_sliding_window_size_step, visible=_show_if_flag("sub_parallel_windows"))
 _add_setting("sub_parallel_window_overlap", "Sub Parallel Window Overlap", "integer", min=_sliding_window_overlap_bound("overlap_min", 1), max=_sliding_window_overlap_bound("overlap_max", 97), step=_sliding_window_overlap_bound("overlap_step", 4), visible=_show_if_flag("sub_parallel_windows"))
 _add_setting("sliding_window_color_correction_strength", "Color Correction Strength (match colors of new window with previous one, 0 = disabled)", "number", min=0.0, max=1.0, step=0.01, visible=_show_if_flag("color_correction"))

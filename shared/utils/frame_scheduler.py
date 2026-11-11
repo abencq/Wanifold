@@ -201,6 +201,90 @@ def continuation_window_overlap(window_overlap, continuation_overlap, *, continu
     return max(overlap, requested) if continuing and requested > 0 else overlap
 
 
+def align_overlap(frame_count: int, step: int, offset: int) -> int:
+    """The largest handoff of ``frame_count`` frames this family can denoise.
+
+    The frames a window inherits are not merely read: they are re-noised and
+    re-denoised inside the window's own latent block (``any2video.py:1748``), so
+    a handoff is stored as whole latent frames and has to sit on the family's
+    grid - a multiple of ``step`` for an offset-0 family, ``offset + k*step`` for
+    the usual offset-1 one. Asking for 15 frames on a 4-frame grid therefore
+    means 13. The planner and the job log state that rule through this function;
+    ``extra_settings.continuation_overlap_grid`` builds the slider from the same
+    two numbers, so the control cannot offer a value the job would rewrite.
+    """
+    return _floor_overlap(frame_count, step, offset)
+
+
+def resolve_continuation_handoff(window_overlap, continuation_overlap, *, step, offset, continuing):
+    """The handoff a continuation really runs with, and what it took to get there.
+
+    ``continuation_window_overlap`` chooses between the two settings; this adds
+    the latent grid, because the chosen number is only usable once it sits on it.
+    Flooring can undo the lift it just described - a Continuation Overlap of 15
+    against a Windows Frames Overlap of 13 both land on 13 - so the answer says
+    whether the value moved (``snapped``) and whether it ended up changing
+    nothing at all (``vacuous``). The job log reads these flags; a number that
+    was announced before it was floored is a number the log lied about.
+
+    ``head`` is the overlap to run with, or 0 when the job keeps the overlap it
+    was given (the same convention ``continuation_window_overlap``'s caller uses).
+    """
+    try:
+        requested = int(continuation_overlap or 0)
+    except (TypeError, ValueError):
+        requested = 0
+    overlap = int(window_overlap or 0)
+    lifted = int(continuation_window_overlap(window_overlap, continuation_overlap, continuing=continuing))
+    wanted = lifted > overlap
+    aligned_window = align_overlap(overlap, step, offset)
+    aligned_head = align_overlap(lifted, step, offset)
+    head = aligned_head if wanted and aligned_head > aligned_window else 0
+    return {
+        "head": head,
+        "requested": requested,
+        "window_overlap": overlap,
+        "snapped": wanted and head > 0 and head != requested,
+        "vacuous": wanted and head == 0,
+    }
+
+
+def continuation_source_shortfall(handoff, available):
+    """What the handoff becomes when the continued video is too short, else None.
+
+    A window cannot inherit more frames than the footage it continues holds, and
+    that footage is measured after its own frame rate is matched to the job's, so
+    a 48 fps video continued at 24 fps offers half as many frames as it has
+    samples. The planner has always clamped to it; this says when it does.
+    """
+    try:
+        handoff = int(handoff)
+        available = int(available)
+    except (TypeError, ValueError):
+        return None
+    if handoff <= 0 or available <= 0 or available >= handoff:
+        return None
+    return available
+
+
+def continuation_window_shortfall(handoff, window_size, latent_size):
+    """What the handoff becomes when the window cannot hold it, else None.
+
+    The handoff lives inside the window, whose size bounds it: the job keeps no
+    more than one latent block of the window for new frames. ``wgp.py:8607`` is
+    the rule this mirrors, and a handoff that reaches it silently is a setting
+    the run quietly overrode.
+    """
+    try:
+        handoff = int(handoff)
+        limit = int(window_size) - int(latent_size)
+    except (TypeError, ValueError):
+        return None
+    if handoff <= 0 or limit <= 0 or handoff <= limit:
+        return None
+    return limit
+
+
 def job_continues_video(video_source, branch_from_latent=False):
     """Whether a job starts from a run of frames it must keep moving from: a
     Video Source, or the kept region of a WanGP latent file. A start image is not
