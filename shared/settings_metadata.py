@@ -12,8 +12,9 @@ _SLIDING = {
     # Continuation Color Match belongs to the join between a video and the footage it continues,
     # not to the cadence of the windows - hence its name. It travels with this group because the
     # families that can continue a video are the families that slide, and the group decides which
-    # keys survive in a job's metadata.
-    "continuation_color_strength",
+    # keys survive in a job's metadata. The anchor - which frame that colour is read from - is the
+    # other half of the same decision, so it travels with it and not on its own.
+    "continuation_color_strength", "continuation_color_anchor",
 }
 _AUDIO_POSTPROCESSING = {"postprocess_audio", "postprocess_audio_prompt", "postprocess_audio_neg_prompt"}
 _VISUAL_POSTPROCESSING = {"temporal_upsampling", "spatial_upsampling", "film_grain_intensity", "film_grain_saturation"}

@@ -197,6 +197,45 @@ def continuation_color_reference(strength, reference, frames):
         return last.to(torch.float32).div_(torch.tensor(127.5, device=last.device)).sub_(1.0)
     return last.detach().clone()
 
+def continuation_color_lock_anchor(lock, carried, resolved):
+    """The frame a continuation's window is matched to, once the anchor has had its say.
+
+    Chained (the default) keeps whatever the path resolved - the last frame of the window before it,
+    so a long run follows the light it drifts into. Locked replaces that with the frame the first
+    window was matched to, carried down the window loop, so every window holds the light of the
+    footage the job started from however long the run gets. There is no carried frame on the first
+    window - it has no past - and a slider can hand a string, so the answer is the resolved frame
+    whenever the lock is off, unreadable or has nothing to offer. The frame is returned as it was
+    given: this chooses, it does not copy or cast.
+    """
+    try:
+        locked = bool(int(lock or 0))
+    except (TypeError, ValueError):
+        locked = False
+    return carried if locked and carried is not None else resolved
+
+def continuation_color_window_anchor(strength, reference, kept, lock, carried, handoff=None):
+    """The frame a window of a continuation is matched to, decided in one place.
+
+    Three things can answer, in this order. A path that already owns a reference - a start image, a
+    guide video, a mask prefix - keeps it. Failing that, the run of frames this window continues:
+    which is the footage on the first window, and on the windows after it the footage is out of
+    reach, so the hand-off the window carries in as its own prefix stands in for it - the previous
+    window as it was actually delivered, which is what *the last frame of the previous window* names.
+    A locked job finally overrides whatever was found with the frame the first window was matched to,
+    carried down the window loop, so the run holds the light of the footage however long it gets. An
+    off strength asks for no frame at all, so nothing is decoded, copied or cast.
+
+    Reading both runs here, in this order, is the point of the helper. A caller that reads only the
+    footage resolves nothing from the second window on - the classic continuation hands no footage
+    past the first window - and so matches no frame at all while the job's opening line promises that
+    every window is matched.
+    """
+    resolved = continuation_color_reference(strength, reference, kept)
+    if resolved is None:
+        resolved = continuation_color_reference(strength, None, handoff)
+    return continuation_color_lock_anchor(lock, carried, resolved)
+
 def guide_to_dtype(video, dtype, chunk_frames=16):
     """A control video (C, T, H, W) in dtype with the values of guide_to_float, converted by chunks of frames: a uint8 guide does not go
     through a float32 copy of the whole video. Float videos are only cast."""

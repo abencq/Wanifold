@@ -42,7 +42,7 @@ from shared.utils.vace_preprocessor import VaceVideoProcessor
 from shared.utils.basic_flowmatch import FlowMatchScheduler
 from shared.utils.euler_scheduler import EulerScheduler
 from shared.utils.lcm_scheduler import LCMScheduler
-from shared.utils.utils import get_outpainting_frame_location, resize_lanczos, calculate_new_dimensions, convert_image_to_tensor, convert_tensor_to_image, fit_image_into_canvas, guide_mask_to_float, guide_to_float, continuation_color_reference
+from shared.utils.utils import get_outpainting_frame_location, resize_lanczos, calculate_new_dimensions, convert_image_to_tensor, convert_tensor_to_image, fit_image_into_canvas, guide_mask_to_float, guide_to_float, continuation_color_window_anchor
 from .multitalk.multitalk_utils import MomentumBuffer, adaptive_projected_guidance, match_and_blend_colors, match_and_blend_colors_with_mask
 from .wanmove.trajectory import replace_feature, create_pos_feature_map
 from .alpha.utils import load_gauss_mask, apply_alpha_shift
@@ -519,6 +519,8 @@ class WanAny2V:
         speakers_bboxes = None,
         color_correction_strength = 1,
         continuation_color_correction_strength = 0,
+        continuation_color_lock = 0,
+        continuation_color_anchor_frame = None,
         prefix_frames_count = 0,
         image_mode = 0,
         window_no = 0,
@@ -2054,21 +2056,26 @@ class WanAny2V:
         # the window comes back wearing whatever exposure the model happened to render and the join
         # steps. The Continuation Color Match setting acts on that step. Its reference is the last
         # frame of the run the window continues - the kept decode on a latent branch, the source's
-        # own frames on the classic path - which is what the engine already matches to where a
+        # own frames on the classic path, and on any window after the first the hand-off it carries
+        # in as its prefix - which is what the engine already matches to where a
         # prefix does declare itself (an inpaint prefix takes its last prefix frame, a guide video
         # its last guide frame). The two routes that silence color_correction_strength are silent
         # here too: an end frame means a shot transition, whose colors have nothing to carry on,
         # and an HDR input ("&" in the video prompt type) carries its prefix in HDR levels, which
         # the uint8 levels of a plain decode cannot speak.
+        # Two anchors are on offer, and they only differ from the second window on: chained, where
+        # each window is matched to the window before it and a long run is free to walk
+        # away from the footage it started from; locked, where the frame the first window was
+        # matched to is handed down the loop and every window is matched to that same frame, so the
+        # run keeps the light of the footage however long it gets. The locked frame outranks a path's
+        # own reference on purpose: the user asked for the footage's colors, and the footage is the
+        # frame that was carried over.
         _cont_cc_strength = float(continuation_color_correction_strength or 0) if (image_end is None and "&" not in video_prompt_type) else 0.0
-        _cont_cc_ref = None
-        if _cont_cc_strength > 0 and (window_start_frame_no + prefix_frames_count) > 1:
-            _cont_cc_ref = continuation_color_reference(
-                _cont_cc_strength, color_reference_frame,
-                _kept_region() if prefix_kept_windows is not None else prefix_video)
-        needs_color_correction = (
-            (color_correction_strength > 0 and (window_start_frame_no + prefix_frames_count) > 1)
-            or _cont_cc_ref is not None)
+        # Which frame this window is matched to is settled once, and below the decode: the first
+        # window answers with the footage it continues, every window after it answers with the
+        # hand-off it was conditioned on, and the hand-off only exists as pixels once this window has
+        # been decoded. Both runs are read by one helper so they cannot disagree about which speaks.
+        _cont_cc_past = (window_start_frame_no + prefix_frames_count) > 1
         videos = self.vae.decode_to_cpu_uint8(x0, VAE_tile_size)
         if any_vae2:
             videos2 = self.vae2.decode_to_cpu_uint8(x0, VAE_tile_size)
@@ -2085,6 +2092,20 @@ class WanAny2V:
         else:
             videos = videos[0] # return only first video
             if any_vae2: videos2 = videos2[0] # return only first video
+        # The frames of the hand-off are the frames this window continues, and they arrive as its own
+        # prefix: on the first window they are the footage being continued, on every window after it
+        # they are what the window before it delivered. They are counted here because the anchor and
+        # the matching below must agree on how many there are - those frames are not the model's to
+        # recolour, whatever the anchor was read from.
+        _cc_head = 0 if image_outputs else min(int(prefix_frames_count or 0), max(0, int(videos.shape[1]) - 1))
+        _cont_cc_ref = continuation_color_window_anchor(
+            _cont_cc_strength, color_reference_frame,
+            _kept_region() if prefix_kept_windows is not None else prefix_video,
+            continuation_color_lock, continuation_color_anchor_frame,
+            videos[:, :_cc_head] if _cc_head > 0 else None) if (
+            _cont_cc_strength > 0 and _cont_cc_past) else None
+        needs_color_correction = (
+            (color_correction_strength > 0 and _cont_cc_past) or _cont_cc_ref is not None)
         if needs_color_correction:
             videos = videos.float().div_(127.5).sub_(1.0) if videos.dtype == torch.uint8 else videos
             if vace and False:
@@ -2096,11 +2117,14 @@ class WanAny2V:
                 # footage this window continues - or the model's own rebuild of them - and they are
                 # not the model's to recolour: repainting them would move the source footage instead
                 # of bringing the new segment to it.
-                _cc_head = 0 if image_outputs else min(int(prefix_frames_count or 0), max(0, int(videos.shape[1]) - 1))
                 _cc_made = videos[:, _cc_head:] if _cc_head > 0 else videos
                 _cc_made = match_and_blend_colors(_cc_made.unsqueeze(0), _cont_cc_ref.unsqueeze(0), _cont_cc_strength).squeeze(0)
                 videos = torch.cat([videos[:, :_cc_head], _cc_made], dim=1) if _cc_head > 0 else _cc_made
-                print(f"Continuation color match: {int(_cc_made.shape[1])} generated frame(s) matched to the last kept frame at strength {_cont_cc_strength:.2f}; the {int(_cc_head)} frame(s) of the hand-off keep the colors of the footage they continue.")
+                _cc_anchor = ("the last frame of the video being continued"
+                              if window_no <= 1 or continuation_color_lock else "the last frame of the previous window")
+                print(f"Continuation color match: {int(_cc_made.shape[1])} generated frame(s) pulled onto the brightness, "
+                      f"contrast and color balance of {_cc_anchor} at strength {_cont_cc_strength:.2f}; the {int(_cc_head)} "
+                      f"frame(s) of the hand-off keep the colors of the footage they continue.")
             elif color_reference_frame is not None:
                 videos = match_and_blend_colors(videos.unsqueeze(0), color_reference_frame.unsqueeze(0), color_correction_strength).squeeze(0)
             elif color_correction_strength > 0:
@@ -2108,6 +2132,12 @@ class WanAny2V:
             videos = videos.clamp_(-1, 1).add_(1.0).mul_(127.5).round_().clamp_(0, 255).to(torch.uint8)
 
         ret = { "x" : videos, "latent_slice" : latent_slice}
+        if _cont_cc_ref is not None and continuation_color_lock:
+            # Hand the frame this job's join was matched to down to the windows that follow, so a
+            # locked anchor stays locked instead of drifting one window at a time. The frame is one
+            # image in guide levels, already a copy of nothing the caller owns (see
+            # continuation_color_reference), so carrying it across a loop cannot retouch a delivery.
+            ret["continuation_color_anchor"] = _cont_cc_ref
         if prefix_kept_windows is not None and int(prefix_kept_frames or 0) > 0:
             # The output's kept prefix is the one decode of the kept windows - the frames that fed
             # the guide, never a copy of another video. A failed or short decode stops the job.

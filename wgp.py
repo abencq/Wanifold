@@ -7694,6 +7694,7 @@ def generate_media(
     sub_parallel_window_overlap,
     sliding_window_color_correction_strength,
     continuation_color_strength,
+    continuation_color_anchor,
     sliding_window_overlap_noise,
     sliding_window_discard_last_frames,
     sliding_window_trim_first_frames,
@@ -8126,18 +8127,30 @@ def generate_media(
     else:
         continuation_head_frames = 0
     # The colors a continued segment is matched to are a different question from the colors windows
-    # are matched to each other: a join is one pull onto footage made elsewhere, while a window to
-    # window match repeats down a long run and compounds. Continuation Color Match speaks for the
-    # join window alone, and only for the jobs that continue a video.
+    # are matched to each other, and both are a different question again from *which frame* those
+    # colors are read from. The strength says how hard the pull is; the anchor says where it pulls
+    # to: the last frame of the window before it, so a long run follows the light it drifts into, or
+    # the frame the join started from, so every window keeps the light of the footage it continues.
+    # A run measured on a rendered job is why the choice exists: with the join matched, the model
+    # carried 1.4 times that correction into the next window on its own, so an unmatched junction can
+    # be quieter than a matched one, and a matched one needs saying what it is matched to.
+    # Only a job that continues a video has a join to speak of.
     try:
         continuation_color = float(continuation_color_strength or 0)
     except (TypeError, ValueError):
         continuation_color = 0.0
+    try:
+        continuation_color_lock = 1 if int(continuation_color_anchor or 0) else 0
+    except (TypeError, ValueError):
+        continuation_color_lock = 0
     if not job_continues_video(video_source, branch_from_latent):
         continuation_color = 0.0
     if continuation_color > 0:
-        print(f"Continuation color match: the frames the first window generates will be matched to the last kept "
-              f"frame at strength {continuation_color:.2f}; the frames of the hand-off keep the colors of the footage they continue.")
+        anchor_words = ("the last frame of the video being continued" if continuation_color_lock
+                        else "the last frame of the window before it")
+        print(f"Continuation color match: the new frames of every window will be pulled onto the brightness, "
+              f"contrast and color balance of {anchor_words} at strength {continuation_color:.2f}; the frames of "
+              f"the hand-off keep the colors of the footage they continue.")
     if sliding_window_overlap !=0:
         if sliding_window_defaults.get("overlap_default", 0) != sliding_window_overlap:
             overlap_offset = sliding_window_defaults.get("overlap_offset", 1)
@@ -8794,6 +8807,7 @@ def generate_media(
         guide_start_frame = 0 # pos of of first control video frame of current window  (reuse_frames later than the first processed frame)
         keep_frames_parsed = [] # aligned to the first control frame of current window (therefore ignore previous reuse_frames)
         pre_video_guide = None # reuse_frames of previous window
+        continuation_color_anchor_frame = None # the frame a join was matched to, carried to the windows after it
         pre_audio_guide, pre_audio_guide_sample_rate = None, 0
         image_size = default_image_size #  default frame dimensions for budget until it is change due to a resize
         sample_fit_canvas = fit_canvas
@@ -9560,7 +9574,9 @@ def generate_media(
                     sub_parallel_window_size=sub_parallel_window_size,
                     sub_parallel_window_overlap=sub_parallel_window_overlap,
                     color_correction_strength = sliding_window_color_correction_strength,
-                    continuation_color_correction_strength = continuation_color if window_no == 1 else 0.0,
+                    continuation_color_correction_strength = continuation_color,
+                    continuation_color_lock = continuation_color_lock,
+                    continuation_color_anchor_frame = continuation_color_anchor_frame,
                     conditioning_latents_size = conditioning_latents_size,
                     input_video_is_hdr=input_video_is_hdr,
                     lora_dir=lora_dir,
@@ -9701,6 +9717,15 @@ def generate_media(
                     # returned by the pipeline so the job uses it as the
                     # output video's prefix (source independence).
                     branch_decoded_prefix = samples.get("decoded_prefix", None)
+                    # The frame this job's join was matched to, kept for the windows that follow: an
+                    # anchor locked to the footage must stay locked at window 3, not hop to window 2.
+                    # A chained anchor carries the value and never reads it, since the previous
+                    # window's last frame already is this window's reference. Held on the CPU: the
+                    # next window may well be decoded by another process, and one frame of float has
+                    # no business occupying a VRAM block between windows.
+                    _cont_cc_anchor = samples.get("continuation_color_anchor", None)
+                    if _cont_cc_anchor is not None:
+                        continuation_color_anchor_frame = _cont_cc_anchor.detach().cpu()
                     meshes = samples.get("meshes", None)
                     splats = samples.get("splats", None)
                     video_file = samples.get("video_file", None)  # a finished video made by the model (a temporary file it hands over), saved instead of "x"
@@ -12353,6 +12378,7 @@ def save_inputs(
             sub_parallel_window_overlap,
             sliding_window_color_correction_strength,
             continuation_color_strength,
+            continuation_color_anchor,
             sliding_window_overlap_noise,
             sliding_window_discard_last_frames,
             sliding_window_trim_first_frames,
@@ -13477,6 +13503,21 @@ def generate_media_tab(update_form = False, state_dict = None, ui_defaults = Non
 
     def get_container_def(key, **context):
         return extra_settings.get_container_def(key, model_def, model_type=model_type, get_max_frames=get_max_frames, **context)
+
+    def setting_choice(key, choices, *, value=None, visible=None, label=None, setting_context=None,
+                       respect_setting_visibility=True, **kwargs):
+        """A registered setting offered as a list of words instead of a slider: the same visibility
+        rules and the same default lookup as setting_slider, carrying the value the registry
+        describes it with (an integer here), so it travels through settings files and job metadata
+        exactly like the slider it sits beside."""
+        setting_def = get_setting_def(key, **({} if setting_context is None else setting_context))
+        return gr.Dropdown(
+            choices=choices,
+            value=ui_get(key) if value is None else value,
+            label=setting_def.label if label is None else label,
+            visible=setting_def.visible if visible is None else (setting_def.visible and visible if respect_setting_visibility else visible),
+            **kwargs,
+        )
 
     def setting_slider(key, *, value=None, visible=None, label=None, minimum=None, maximum=None, step=None, setting_context=None, respect_setting_visibility=True, **kwargs):
         setting_def = get_setting_def(key, **({} if setting_context is None else setting_context))
@@ -14657,6 +14698,14 @@ def generate_media_tab(update_form = False, state_dict = None, ui_defaults = Non
                             sub_parallel_window_overlap = setting_slider("sub_parallel_window_overlap", value=ui_get("sub_parallel_window_overlap", 17))
                         sliding_window_continuation_overlap = setting_slider("sliding_window_continuation_overlap", value=ui_get("sliding_window_continuation_overlap", 5))
                         continuation_color_strength = setting_slider("continuation_color_strength", value=ui_get("continuation_color_strength", 0))
+                        continuation_color_anchor = setting_choice(
+                            "continuation_color_anchor",
+                            choices=[
+                                ("The last frame of the previous window", 0),
+                                ("The last frame of the video being continued", 1),
+                            ],
+                            value=ui_get("continuation_color_anchor", 0),
+                        )
                         sliding_window_trim_first_frames = setting_slider("sliding_window_trim_first_frames", value=ui_get("sliding_window_trim_first_frames", 0))
 
                         video_prompt_type_alignment = gr.Dropdown(
