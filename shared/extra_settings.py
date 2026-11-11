@@ -392,17 +392,20 @@ def continuation_overlap_grid(model_def: dict[str, Any] | None) -> tuple[int, in
     and quietly rewrites. Wan 2.2 hands off 1, 5, 9, 13 ...; LTX2 steps by 8; an
     offset-0 family such as SVI2 Pro counts 4, 8, 12 from zero.
 
-    The family's own overlap bounds describe that grid when it declares them:
-    ``overlap_step`` is the stride, ``overlap_min`` and ``overlap_offset`` where
-    the series starts. Several families set ``overlap_step`` to 0 because their
-    range is a single value, so the stride falls back to the latent size the same
-    way ``wgp.py:3286`` does. The ceiling starts at the generous
-    ``_continuation_overlap_max`` - a family that pins its own overlap to a single
-    frame is precisely the case this setting exists to lift - and is then brought
+    The family's bounds say where the series starts: ``overlap_min`` and
+    ``overlap_offset`` say the first handoff. ``overlap_step`` is honoured only when
+    it is the latent block or a coarser multiple of it, because that number describes
+    the family's own *Windows Frames Overlap* control: Magi Human declares a stride of
+    1 there and divides a window in blocks of 4, and the planner floors a handoff by
+    the block (``wgp.py:8132``), so 2 is not a handoff it can run. Several families set
+    ``overlap_step`` to 0 because their own range is a single value, so the stride falls
+    back to the latent size the same way ``wgp.py:3286`` does. The ceiling starts at the
+    generous ``_continuation_overlap_max`` - a family that pins its own overlap to a
+    single frame is precisely the case this setting exists to lift - and is then brought
     back down onto the grid. A ceiling that sits between two handoffs is the same
-    dishonesty one down: the control offers a number, and the job floors it the
-    moment it runs. Ovi divides a window in blocks of 120 frames, so one handoff
-    survives that rule for it, and the control says so rather than offering 97.
+    dishonesty one down: the control offers a number, and the job floors it the moment
+    it runs. Ovi divides a window in blocks of 120 frames, so one handoff survives that
+    rule for it, and the control says so rather than offering 97.
     """
     defaults = _sliding_window_defaults(model_def)
     offset = _continuation_overlap_offset(model_def)
@@ -415,7 +418,9 @@ def continuation_overlap_grid(model_def: dict[str, Any] | None) -> tuple[int, in
         step = int(defaults.get("overlap_step", 0))
     except Exception:
         step = 0
-    if step <= 0:
+    if step < stride or step % stride:
+        # Finer than the latent block is a rule for the family's own overlap control rather
+        # than for a handoff, and 0 means the family declares no stride at all.
         step = stride
     try:
         low = int(defaults.get("overlap_min", 0))
