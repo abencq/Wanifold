@@ -800,6 +800,15 @@ def _build_tiling_config(tile_size: int | tuple | list | None, fps: float | None
     return TilingConfig(spatial_config=spatial_config, temporal_config=temporal_config)
 
 
+def ltx2_video_vae_dtype(requested: torch.dtype | None) -> torch.dtype:
+    """The one precision the LTX-2 video VAE works in (issues.md O6).
+
+    In float16 its encoder returns NaN and its decoder renders flat grey with
+    only the edges left. The audio VAE and vocoder keep the requested dtype.
+    """
+    return torch.bfloat16 if requested in (None, torch.float16) else requested
+
+
 def load_ltx2_decode_models(
     video_vae_file,
     audio_vae_file="",
@@ -828,6 +837,11 @@ def load_ltx2_decode_models(
     # NAD variant: the video VAE is a CausalDiffusionVAE with a different
     # (non-tilable) decoder; every other version is the classic LTX-VAE.
     diffusion_vae = video_config.get("vae", {}).get("_class_name") == "CausalDiffusionVAE"
+    # Only the video VAE is pinned; the audio VAE and vocoder keep VAE_dtype.
+    video_vae_dtype = ltx2_video_vae_dtype(VAE_dtype)
+    if video_vae_dtype != VAE_dtype:
+        print(f"[LTX2] the video VAE loads in {str(video_vae_dtype).replace('torch.', '')}, not "
+              f"{str(VAE_dtype).replace('torch.', '')}: this VAE overflows in float16 (issues.md O6).")
     video_config_vae = video_config.setdefault("vae", {})
     # use 'reflect' padding to make sure the model works well with tiling
     video_config_vae["spatial_padding_mode"] = "reflect"
@@ -842,7 +856,7 @@ def load_ltx2_decode_models(
         video_vae,
         video_vae_path,
         postprocess_sd=vae_postprocess,
-        default_dtype=VAE_dtype,
+        default_dtype=video_vae_dtype,
         writable_tensors=False,
         ignore_missing_keys=False,
         ignore_unused_weights=True,
@@ -888,21 +902,20 @@ def load_ltx2_decode_models(
                 ignore_missing_keys=False,
             )
             components.vocoder = vocoder
-    for module in (components.video_decoder, getattr(components, "audio_decoder", None), getattr(components, "vocoder", None)):
-        if module is not None:
-            module.eval().requires_grad_(False).to(device)
-            # The loader converts the loaded *parameters* to VAE_dtype but
-            # leaves the registered *buffers* at the checkpoint's dtype (the
-            # 2.5 checkpoints are bf16; the vocoder's FIR filter
-            # coefficients live in buffers) - the vocoder's conv then mixes
-            # fp16 activations with bf16 filters and crashes ("expected
-            # scalar type Half but found BFloat16"). Align the buffers.
-            seen = set()
-            for buffer in module.buffers():
-                if id(buffer) in seen or buffer.dtype == VAE_dtype:
-                    continue
-                seen.add(id(buffer))
-                buffer.data = buffer.data.to(VAE_dtype)
+    for module, module_dtype in ((components.video_decoder, video_vae_dtype),
+                                 (getattr(components, "audio_decoder", None), VAE_dtype),
+                                 (getattr(components, "vocoder", None), VAE_dtype)):
+        if module is None:
+            continue
+        module.eval().requires_grad_(False).to(device)
+        # The loader leaves registered buffers at the checkpoint's dtype, so a
+        # conv can mix fp16 activations with bf16 weights. Align them.
+        seen = set()
+        for buffer in module.buffers():
+            if id(buffer) in seen or buffer.dtype == module_dtype:
+                continue
+            seen.add(id(buffer))
+            buffer.data = buffer.data.to(module_dtype)
     return components
 
 

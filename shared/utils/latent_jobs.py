@@ -1643,6 +1643,10 @@ def _ltx2_latent_decode_windows(send_cmd, gen, model_def, entry, window_specs, a
     device = "cuda" if torch.cuda.is_available() else "cpu"
     fps = float(entry.get("fps") or 0) or float(model_def.get("fps") or 24)
     interrupt_check = lambda: gen.get("abort", False)
+    # The video VAE only works in bfloat16 (ltx2_video_vae_dtype): hand it its own
+    # dtype, not the sidecar's vae_dtype, which the audio models use (O6).
+    _video_param = next(iter(decode_models.video_decoder.parameters()), None)
+    video_dtype = _video_param.dtype if _video_param is not None else vae_dtype
     window_frames_list = []
     audio_waveform_chunks = []
     # The all-latent i2v sidecar splices the embedded start image into frame
@@ -1654,7 +1658,7 @@ def _ltx2_latent_decode_windows(send_cmd, gen, model_def, entry, window_specs, a
             # The sidecar stores the canonical unbatched [c, t, h, w] layout;
             # the LTX-2 VAE decoder (both tiled and full) expects the batched
             # 5D [1, c, t, h, w] layout the generation pipelines feed it.
-            latent = spec["latents"].to(device=device, dtype=vae_dtype)
+            latent = spec["latents"].to(device=device, dtype=video_dtype)
             if latent.dim() == 4:
                 latent = latent.unsqueeze(0)
             video = decode_video_to_tensor(
