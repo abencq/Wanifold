@@ -1871,11 +1871,17 @@ def _save_ltx2_decoded_video(ctx, send_cmd, state, video_source, client_id, plug
             video_windows = (entry or {}).get("windows") or []
             overlap_frames = int((entry or {}).get("sliding_window_overlap") or 0)
             head_trims = [0] * len(audio_waveform_chunks)
-            for idx in range(1, len(audio_waveform_chunks)):
-                if idx < len(video_windows) and fps > 0:
-                    frames = min(int((video_windows[idx] or {}).get("head_trim") or 0), overlap_frames)
-                    if frames > 0:
-                        head_trims[idx] = int(frames * sample_rate / fps)
+            for _idx in range(1, len(audio_waveform_chunks)):
+                if _idx >= len(video_windows) or fps <= 0:
+                    continue
+                _vwin = video_windows[_idx] or {}
+                if _vwin.get("branch_head_mode") == "pixel_rule":
+                    # The writer already dropped the bridge's audio from this
+                    # block, so its video head trim is not an audio head trim.
+                    continue
+                _drop_frames = min(int(_vwin.get("head_trim") or 0), overlap_frames)
+                if _drop_frames > 0:
+                    head_trims[_idx] = int(_drop_frames * sample_rate / fps)
             waveform = latent_io.merge_audio_window_chunks(
                 audio_waveform_chunks, windows, int((audio_entry or {}).get("samples") or 0),
                 head_trims=head_trims)

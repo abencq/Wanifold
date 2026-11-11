@@ -735,7 +735,17 @@ def merge_audio_window_chunks(audio_chunks, window_metas=None, total_samples: in
         trims = [max(0, int(x or 0)) for x in head_trims]
         if len(trims) != len(tensors):
             raise ValueError(f"head_trims length {len(trims)} does not match the {len(tensors)} audio chunks")
-        placed = [t[:, trim:] for t, trim in zip(tensors, trims)]
+        metas = list(window_metas) if (window_metas is not None
+                                       and len(window_metas) == len(tensors)) else [None] * len(tensors)
+        placed = []
+        for t, trim, meta in zip(tensors, trims, metas):
+            run = t[:, trim:]
+            # Crop to the committed length: a longer chunk would push the next
+            # window off its recorded start (issues.md O7).
+            want = int((meta or {}).get("samples") or 0) - trim
+            if 0 < want < run.shape[1]:
+                run = run[:, :want]
+            placed.append(run)
         base = 0
         if window_metas is not None and len(window_metas) == len(tensors) and window_metas[0] is not None:
             base = max(0, int((window_metas[0] or {}).get("start_sample") or 0))
