@@ -14755,14 +14755,14 @@ def generate_media_tab(update_form = False, state_dict = None, ui_defaults = Non
                         sliding_window_continuation_overlap = setting_slider(
                             "sliding_window_continuation_overlap", minimum=_cont_ov_grid[0],
                             value=extra_settings.continuation_overlap_value(model_def, ui_get("sliding_window_continuation_overlap", 5)))
-                        continuation_color_strength = setting_slider("continuation_color_strength", value=ui_get("continuation_color_strength", 0))
+                        continuation_color_strength = setting_slider("continuation_color_strength", value=ui_get("continuation_color_strength", 0.5))
                         continuation_color_anchor = setting_choice(
                             "continuation_color_anchor",
                             choices=[
                                 ("The last frame of the previous window", 0),
                                 ("The last frame of the video being continued", 1),
                             ],
-                            value=ui_get("continuation_color_anchor", 0),
+                            value=ui_get("continuation_color_anchor", 1),
                         )
                         sliding_window_trim_first_frames = setting_slider("sliding_window_trim_first_frames", value=ui_get("sliding_window_trim_first_frames", 0))
 
