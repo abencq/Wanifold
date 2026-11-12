@@ -34,7 +34,12 @@ class VideoConditionByKeyframeIndex(ConditioningItem):
         positions = get_pixel_coords(
             latent_coords=latent_coords,
             scale_factors=latent_tools.scale_factors,
-            causal_fix=latent_tools.causal_fix if self.frame_idx == 0 else False,
+            # The causal first-frame correction belongs to the latent grid, not to where the
+            # reference happens to be parked. The frames a window is generated for carry it, so
+            # a reference that skips it stands 7 pixel frames (292 ms at 24 fps) later than the
+            # frames it replaces: a continuation guide asked to sit at frame 48 reached the model
+            # at frame 55, and the scene drifted to match. Upstream pull request 2628.
+            causal_fix=latent_tools.causal_fix,
         )
         # Negative continuation offsets retain their legacy prepend convention.
         # Layout appearance references use a literal -1 pixel-frame position.

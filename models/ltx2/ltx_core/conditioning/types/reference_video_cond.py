@@ -19,7 +19,11 @@ class VideoConditionByReferenceLatent(ConditioningItem):
         positions = get_pixel_coords(
             latent_coords=latent_tools.patchifier.get_patch_grid_bounds(output_shape=latent_shape, device=self.latent.device),
             scale_factors=latent_tools.scale_factors,
-            causal_fix=latent_tools.causal_fix if self.frame_idx == 0 else False,
+            # Same rule as VideoConditionByKeyframeIndex: the causal first-frame correction is a
+            # property of the latent grid the window is generated on, so a reference parked later
+            # than frame 0 has to carry it too, or it lands 7 pixel frames past its own frames.
+            # Upstream pull request 2628.
+            causal_fix=latent_tools.causal_fix,
         ).to(dtype=torch.float32)
 
         frame_idx = self.frame_idx
