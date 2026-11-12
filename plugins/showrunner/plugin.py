@@ -84,6 +84,14 @@ class WanGPHost:
     def production_workspace(self, title: str, folder: Path) -> str:
         return self._client().ensure_workspace(f"Showrunner - {title}"[:120], folder)
 
+    def gallery_media(self, workspace: str, media_id: str) -> str | None:
+        """The file of a Gallery media id in a production's workspace, None when its Gallery has no such media."""
+        return next((item["path"] for item in self._client().gallery(workspace) if item["id"] == media_id), None)
+
+    def gpu_turn(self, cancelled):
+        """The turn of renders made without the showrunner: after the showrunners at work in other productions, in order with them, never beside Deepy's model."""
+        return self._client().turn(cancelled)
+
     def run_director(self, prompt: str, *, session_dir: Path, workspace: str, title: str, instructions: str = ""):
         return self._client().run(prompt, session_dir=session_dir, workspace=workspace, title=title[:120], instructions=instructions)
 
@@ -148,29 +156,41 @@ class WanGPHost:
         """Deepy's templates of the categories a production uses, as Deepy's settings list them (the built-in ones and the custom one selected
         there), plus the custom templates in `keep` ("category/name") that Showrunner still uses after Deepy's settings moved on; with what the
         video ones take: reference images ("I" in video_prompt_type) and driving audio ("A" in audio_prompt_type)."""
+        from shared import resolutions
         from shared.deepy import tool_settings
         from shared.deepy.ui_settings import get_persisted_assistant_tool_ui_settings
-        from .templates import ROLES, VIDEO_TASKS
+        from .templates import EDIT_TASKS, ROLES, VIDEO_TASKS
         settings = get_persisted_assistant_tool_ui_settings(self.plugin.server_config)
         catalog = []
-        for task in (role["task"] for role in ROLES):
+        for task in dict.fromkeys(role["task"] for role in ROLES):  # two roles draw on the image editor's templates
             default = settings[tool_settings.TOOL_UI_KEYS[task]]
             kept = [name for category, _, name in (str(item or "").partition("/") for item in keep) if category == task]
             choices = {variant: label for current in (default, *kept) for label, variant in tool_settings.list_tool_variant_choices(task, current_variant=current)}
             for variant, label in choices.items():
                 preset = tool_settings.clone_tool_preset(task, variant)  # the model type of every template: speech models differ in how they take cues
-                video = preset if task in VIDEO_TASKS else {}
-                model_def = (self.plugin.get_model_def(video["model_type"]) or {}) if video else {}
+                video = preset if task in (*VIDEO_TASKS, *EDIT_TASKS) else {}
+                model_def = (self.plugin.get_model_def(preset["model_type"]) or {}) if video or task == "edit_image" else {}  # an image editor may declare its trained swap sentences
+                if task in EDIT_TASKS and not model_def.get("video_edit"):  # a remake's shots take painted frames and pins: only a model made for that (Viggle Remake) is offered
+                    continue
                 sources = model_def.get("audio_prompt_type_sources") or {}
-                refs = str((preset if task in (*VIDEO_TASKS, "edit_image") else {}).get("video_prompt_type") or "")  # image edits take the cast's pictures too
+                refs = str((preset if task in (*VIDEO_TASKS, *EDIT_TASKS, "edit_image") else {}).get("video_prompt_type") or "")  # image edits take the cast's pictures too
                 catalog.append({"task": task, "category": tool_settings.TOOL_DISPLAY_NAMES[task], "name": variant, "label": label, "default": variant == default,
                                 "model_type": preset.get("model_type"), "refs": "I" in refs, "audio": "A" in str(video.get("audio_prompt_type") or ""),
+                                "video_edit": model_def.get("video_edit"), "needs_mask": task in EDIT_TASKS and "A" in refs,  # what a remake must prepare for it
+                                "pixels": resolutions.resolution_budget(model_def)["default"] if task in EDIT_TASKS else None,
                                 "soundtrack": "AS" in (sources.get("selection") or []),  # its model can follow an audio_guide kept as the soundtrack
                                 "spoken_line": model_def.get("spoken_line_prompt"),  # how its model takes a line to voice, written in its prompt
+                                "swap_prompt": model_def.get("character_swap_prompt"),  # the sentences its model was trained on to replace people, filled by the frame painter
                                 "sized_by_ref": "K" in refs,  # its output takes the first reference's size, not the production's format
                                 "shortest_s": math.floor(model_def.get("frames_minimum", 0) / model_def.get("fps", 16) * 1000) / 1000,  # the shortest take its model makes
                                 "take_frames": [model_def.get("frames_minimum", 0), model_def.get("frames_steps", 1), model_def.get("fps", 16)],  # its first length and the steps after it
-                                "longest_frames": video.get("sliding_window_size") or (model_def.get("sliding_window_defaults") or {}).get("window_default")})  # the longest take of one window: past it, WanGP generates a second one
+                                "longest_frames": video.get("sliding_window_size") or (model_def.get("sliding_window_defaults") or {}).get("window_default"),  # the longest take of one window: past it, WanGP generates a second one
+                                "sliding_window": bool(model_def.get("sliding_window")),  # its model continues a take past one window
+                                "window_max": (model_def.get("sliding_window_defaults") or {}).get("window_max")})  # the longest one window can be
+        for task in EDIT_TASKS:  # Deepy's settings selected another editing model: a remake uses the first one made for it
+            entries = [entry for entry in catalog if entry["task"] == task]
+            if entries and not any(entry["default"] for entry in entries):
+                entries[0]["default"] = True
         return catalog
 
     def default_templates(self) -> dict:
@@ -179,6 +199,13 @@ class WanGPHost:
 
     def save_default_templates(self, picks: dict) -> None:
         self.plugin.save_config(templates=picks)
+
+    def prompt_rules(self) -> dict:
+        """The user's rules for writing prompts with a template ("category/name": text), for every production."""
+        return self.plugin.config().get("prompt_rules") or {}
+
+    def save_prompt_rules(self, rules: dict) -> None:
+        self.plugin.save_config(prompt_rules=rules)
 
     def frame_size(self, entry: dict, resolution: str) -> str:
         """The size a template's model makes of a resolution: fitted to its grid, as generation does."""
@@ -248,7 +275,8 @@ class ShowrunnerPlugin(WAN2GPPlugin):
 
     def settings_folder(self) -> Path:
         """The plugin's configuration lives in WanGP's settings folder."""
-        return Path(getattr(self.args, "settings", None) or "settings").resolve() / "showrunner"
+        from .store import settings_folder
+        return settings_folder(getattr(self.args, "settings", None))
 
     def config(self) -> dict:
         path = self.settings_folder() / "config.json"

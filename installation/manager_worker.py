@@ -31,7 +31,7 @@ from .version import local_version
 
 
 PROTOCOL = 1
-ACTIONS = {"hardware", "conda_environments", "detect_installation", "catalog", "sources", "register", "inspect", "preview", "apply", "recover", "versions", "remove_version", "launch", "demo", "manager_update"}
+ACTIONS = {"hardware", "conda_environments", "detect_installation", "catalog", "sources", "register", "inspect", "preview", "apply", "recover", "versions", "remove_version", "launch", "demo", "manager_update", "latest_versions"}
 
 
 def application_root(root):
@@ -146,12 +146,15 @@ def run_action(action, args, data, runtime, cancelled, emit, request_id):
         tag = release["tag_name"]
         if not tag.startswith("manager-v"):
             raise InstallError("manager_release_unavailable", "The latest release is not a Manager release. Visit the download page")
-        return {"version": tag.removeprefix("manager-v"), "url": "https://github.com/deepbeepmeep/WanGP/releases/latest/download/WanGPManager.exe"}
+        asset = "WanGPManager-x86_64.AppImage" if sys.platform.startswith("linux") else "WanGPManager.exe"
+        return {"version": tag.removeprefix("manager-v"), "url": f"https://github.com/deepbeepmeep/WanGP/releases/latest/download/{asset}"}
     if action == "catalog":
         if args.get("repository"):
             config, version = remote_catalog(args["repository"], args["commit"], runner)
             return {**catalog_summary(config), "bundled": True, "release": version, "commit": args["commit"], "repository": args["repository"]}
         return source_catalog(args["source"])
+    if action == "latest_versions":  # the newest official builds, for the update notice of the Overview: no progress shown
+        return list_versions(OFFICIAL_REPOSITORY, data, runner, lambda event: None)
     if action == "sources":
         return list_versions(args.get("repository", OFFICIAL_REPOSITORY), data, runner, emit, refresh=bool(args.get("refresh", False)), page=args.get("page", 1), catalog_id=args.get("catalog_id"))
     if action in ("register", "inspect"):
@@ -323,7 +326,9 @@ def main(argv=None):
                     pass
             cancelled.set()
         threading.Thread(target=controls, daemon=True).start()
-        runtime = UvRuntime(args.uv, data / "runtime", base_python=sys.executable)
+        # The Linux AppImage mounts the bundled runtime at a new path on each start: environments built on it would break,
+        # so they use uv's managed Python in the data folder, as other Python versions already do.
+        runtime = UvRuntime(args.uv, data / "runtime", base_python=sys.executable if os.name == "nt" else None)
         result = run_action(request["action"], request.get("args", {}), data, runtime, cancelled, emit, request_id)
         emit({"type": "finished", "result": result})
         return 0
