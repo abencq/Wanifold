@@ -804,9 +804,28 @@ def ltx2_video_vae_dtype(requested: torch.dtype | None) -> torch.dtype:
     """The one precision the LTX-2 video VAE works in (issues.md O6).
 
     In float16 its encoder returns NaN and its decoder renders flat grey with
-    only the edges left. The audio VAE and vocoder keep the requested dtype.
+    only the edges left. The audio VAE and vocoder are not pinned here: the
+    decode job loads them at the precision the latent file recorded for them
+    (``audio_vae_dtype``, issues.md O7).
     """
     return torch.bfloat16 if requested in (None, torch.float16) else requested
+
+
+def ltx2_audio_decode_dtype(model_dtype: torch.dtype | None) -> torch.dtype:
+    """The precision the LTX-2 audio VAE and vocoder decode in (issues.md O7).
+
+    The audio latents are stored in the configured VAE precision, but the
+    pipeline hands them to the audio stack in the model's compute precision:
+    measured against an instrumented run, a float16 model -- which is what a
+    latent file's ``dtype`` field says for the usual fp16 setup -- decodes its
+    audio in bfloat16, while the latents reach the sidecar in float16. The decode
+    job therefore has to be told this precision separately: decoding the recorded
+    latents in float16 reproduces the soundtrack the generation wrote at a
+    correlation of 0.98, in bfloat16 at 0.9995 -- the ceiling the lossy AAC in
+    that soundtrack allows. float32 keeps float32, the same convention as the
+    video VAE above (that half is convention, not measurement).
+    """
+    return torch.bfloat16 if model_dtype in (None, torch.float16) else model_dtype
 
 
 def load_ltx2_decode_models(
@@ -816,6 +835,7 @@ def load_ltx2_decode_models(
     VAE_dtype: torch.dtype = torch.float32,
     device: str = "cpu",
     config_fallback_path: str = "",
+    audio_dtype: torch.dtype | None = None,
 ):
     """Load only the VAE/vocoder components needed to decode saved LTX-2 latents.
 
@@ -825,8 +845,16 @@ def load_ltx2_decode_models(
     can decode a latent companion file without loading the whole model.
     ``config_fallback_path`` is used when the checkpoint itself carries no
     config metadata (all-in-one models).
+    ``audio_dtype`` is the precision the audio VAE and vocoder ran in when the
+    video was written, as recorded by the latent file: the waveform a decode
+    produces depends on it, so it is kept separate from the video ``VAE_dtype``
+    and defaults to it for files that recorded no audio precision (issues.md
+    O7). The video VAE ignores both and uses ``ltx2_video_vae_dtype``.
     """
     from mmgp import offload as mmgp_offload
+
+    if audio_dtype is None:
+        audio_dtype = VAE_dtype
 
     video_vae_path = fl.locate_file(str(video_vae_file), error_if_none=False)
     if not video_vae_path or not os.path.isfile(video_vae_path):
@@ -837,7 +865,7 @@ def load_ltx2_decode_models(
     # NAD variant: the video VAE is a CausalDiffusionVAE with a different
     # (non-tilable) decoder; every other version is the classic LTX-VAE.
     diffusion_vae = video_config.get("vae", {}).get("_class_name") == "CausalDiffusionVAE"
-    # Only the video VAE is pinned; the audio VAE and vocoder keep VAE_dtype.
+    # Only the video VAE is pinned; the audio half loads at its own recorded precision.
     video_vae_dtype = ltx2_video_vae_dtype(VAE_dtype)
     if video_vae_dtype != VAE_dtype:
         print(f"[LTX2] the video VAE loads in {str(video_vae_dtype).replace('torch.', '')}, not "
@@ -879,7 +907,7 @@ def load_ltx2_decode_models(
             audio_vae,
             audio_vae_path,
             postprocess_sd=_make_vae_postprocess("audio_vae."),
-            default_dtype=VAE_dtype,
+            default_dtype=audio_dtype,
             writable_tensors=False,
             ignore_missing_keys=False,
         )
@@ -897,14 +925,14 @@ def load_ltx2_decode_models(
                 vocoder,
                 vocoder_path,
                 postprocess_sd=_make_sd_postprocess(VOCODER_COMFY_KEYS_FILTER),
-                default_dtype=VAE_dtype,
+                default_dtype=audio_dtype,
                 writable_tensors=False,
                 ignore_missing_keys=False,
             )
             components.vocoder = vocoder
     for module, module_dtype in ((components.video_decoder, video_vae_dtype),
-                                 (getattr(components, "audio_decoder", None), VAE_dtype),
-                                 (getattr(components, "vocoder", None), VAE_dtype)):
+                                 (getattr(components, "audio_decoder", None), audio_dtype),
+                                 (getattr(components, "vocoder", None), audio_dtype)):
         if module is None:
             continue
         module.eval().requires_grad_(False).to(device)
@@ -2462,6 +2490,13 @@ class LTX2:
                 audio_latent = latent_capture.get("audio")
                 if audio_latent is not None and audio_latent.numel() > 0:
                     sample_rate = int(output_audio_sampling_rate)
+                    # The precision the audio VAE and vocoder decoded the soundtrack
+                    # with. Every LTX-2 component loads at the model's precision
+                    # (_load_component's default_dtype=self.dtype), which need not be
+                    # the configured VAE precision, and the vocoder is sensitive to the
+                    # difference: the same latents decode bit-exactly in one precision
+                    # and some 2% off in another (issues.md O7).
+                    audio_decode_dtype = str(ltx2_audio_decode_dtype(self.dtype)).replace("torch.", "")
                     audio_payload = latent_io.build_audio_latent_payload(
                         # The 4D [1, c, t, mel] latent is flattened to [c, t*mel]
                         # (mel bins innermost) so it fits the [c, t] audio
@@ -2479,7 +2514,7 @@ class LTX2:
                         loras=lora_names,
                         audio_vae_file=os.path.basename(str(self.audio_vae_path)) if getattr(self, "audio_vae_path", None) else "",
                         audio_vae_sha256=latent_io.sha256_file(self.audio_vae_path) if getattr(self, "audio_vae_path", None) and os.path.isfile(str(self.audio_vae_path)) else "",
-                        audio_vae_dtype=str(self.VAE_dtype).replace("torch.", ""),
+                        audio_vae_dtype=audio_decode_dtype,
                         sample_rate=sample_rate,
                         channels=int(audio_np.shape[1]) if audio_np is not None and audio_np.ndim == 2 else 2,
                         samples=int(audio_np.shape[0]) if audio_np is not None and audio_np.ndim == 2 else 0,

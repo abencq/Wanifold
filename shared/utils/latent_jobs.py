@@ -1644,9 +1644,14 @@ def _ltx2_latent_decode_windows(send_cmd, gen, model_def, entry, window_specs, a
     fps = float(entry.get("fps") or 0) or float(model_def.get("fps") or 24)
     interrupt_check = lambda: gen.get("abort", False)
     # The video VAE only works in bfloat16 (ltx2_video_vae_dtype): hand it its own
-    # dtype, not the sidecar's vae_dtype, which the audio models use (O6).
+    # dtype, not the sidecar's vae_dtype (O6). The audio VAE and vocoder were
+    # loaded at the precision the audio entry recorded (O7), so read each half's
+    # dtype off the module that decodes it rather than assuming one dtype.
     _video_param = next(iter(decode_models.video_decoder.parameters()), None)
     video_dtype = _video_param.dtype if _video_param is not None else vae_dtype
+    _audio_decoder = getattr(decode_models, "audio_decoder", None)
+    _audio_param = next(iter(_audio_decoder.parameters()), None) if _audio_decoder is not None else None
+    audio_dtype = _audio_param.dtype if _audio_param is not None else vae_dtype
     window_frames_list = []
     audio_waveform_chunks = []
     # The all-latent i2v sidecar splices the embedded start image into frame
@@ -1705,7 +1710,7 @@ def _ltx2_latent_decode_windows(send_cmd, gen, model_def, entry, window_specs, a
                 # [1, c, t, mel] layout the audio VAE expects (mel_bins was
                 # recorded at save time; 16 is the LTX-2 default).
                 mel_bins = int((audio_entry or {}).get("mel_bins") or 16)
-                audio_latent = audio_windows[idx]["latents"].to(device=device, dtype=vae_dtype)
+                audio_latent = audio_windows[idx]["latents"].to(device=device, dtype=audio_dtype)
                 if audio_latent.dim() == 2:
                     audio_latent = audio_latent.reshape(1, audio_latent.shape[0], audio_latent.shape[1] // max(1, mel_bins), max(1, mel_bins))
                 waveform = decode_audio(audio_latent, decode_models.audio_decoder, decode_models.vocoder)
@@ -1742,18 +1747,29 @@ def _edit_latent_job_ltx2(ctx, send_cmd, state, video_source, client_id, plugin_
     # with the same dtype (decoding with a different precision than the
     # generation changes the decoded pixels slightly). The server config
     # is the fallback for sidecars that do not record it.
-    _recorded_dtype = {"float16": torch.float16, "16": torch.float16,
-                       "bfloat16": torch.bfloat16,
-                       "float32": torch.float, "32": torch.float}.get(str(entry.get("vae_dtype") or ""))
+    _recorded_dtype = _DTYPE_MAP.get(str(entry.get("vae_dtype") or ""))
     vae_dtype = _recorded_dtype if _recorded_dtype is not None else (
         torch.float16 if str(ctx.server_config.get("vae_precision", "16")) == "16" else torch.float)
 
     from models.ltx2 import ltx2_handler
-    from models.ltx2.ltx2 import build_decode_tiling_config, load_ltx2_decode_models
+    from models.ltx2.ltx2 import build_decode_tiling_config, ltx2_audio_decode_dtype, load_ltx2_decode_models
 
     audio_entry = latent_io.audio_latent_payload(sidecar_obj)
     audio_windows = latent_io.audio_window_specs(audio_entry) if audio_entry is not None else []
     needs_audio = len(audio_windows) > 0
+    # The audio VAE and vocoder run at the precision recorded on the audio entry:
+    # the generation decodes audio at the model's compute precision, which need not
+    # be the configured VAE precision the latents themselves are stored in, and the
+    # vocoder is sensitive to the difference (issues.md O7). A file written before
+    # the field carried that precision restates the video VAE's dtype in it - the
+    # legacy value, not a decision the generation made - so that restatement is
+    # re-derived from the rule. Re-deriving cannot contradict a file written today:
+    # the two entries agree exactly when the rule leaves the recorded dtype alone.
+    _recorded_audio = str((audio_entry or {}).get("audio_vae_dtype") or "")
+    if _recorded_audio and _recorded_audio == str(entry.get("vae_dtype") or ""):
+        _recorded_audio = str(ltx2_audio_decode_dtype(vae_dtype)).replace("torch.", "")
+    _recorded_audio_dtype = _DTYPE_MAP.get(_recorded_audio)
+    audio_decode_dtype = _recorded_audio_dtype if _recorded_audio_dtype is not None else vae_dtype
 
     # The VAE names recorded in the sidecar take precedence (they are the
     # ones that produced this latent); the model definition provides the
@@ -1794,6 +1810,7 @@ def _edit_latent_job_ltx2(ctx, send_cmd, state, video_source, client_id, plugin_
             VAE_dtype=vae_dtype,
             device=decode_device,
             config_fallback_path=config_fallback,
+            audio_dtype=audio_decode_dtype,
         )
     except Exception as exc:
         send_cmd("error", gr.Error(f"Unable to load the VAE components required to decode this LTX2 latent: {exc}"))
