@@ -53,6 +53,7 @@ fixtures = os.environ.get('FORK_TABLE_FIXTURES')   # a dir holding api.json: the
 BEGIN, END = '<!-- BEGIN GENERATED', '<!-- END GENERATED -->'
 SYNC_BEGIN, SYNC_END = '<!-- SYNCED -->', '<!-- /SYNCED -->'
 GREEN = 'https://img.shields.io/badge/merged-brightgreen'
+AMBER = 'https://img.shields.io/badge/addressed%20upstream-orange'
 REF = 'refs/remotes/origin/main'
 
 def gh(path):
@@ -102,6 +103,30 @@ notes = json.load(open(notes_file, encoding='utf-8'))
 up, author = notes['upstream_repo'], notes['author']
 areas, prs = notes['areas'], notes['prs']
 closed_reason, fork_only = notes.get('closed_reason', {}), notes.get('fork_only', [])
+# A pull request upstream answered by writing the same fix itself is closed rather than merged, and the
+# fork no longer needs it. It stays on the front page's table with that state, because "upstream has it"
+# is the answer a reader of this page came for; the note is also the reason the ledger's closed row gives.
+addressed = {int(k): v for k, v in notes.get('addressed_upstream', {}).items()}
+addressed_commit = {int(k): v for k, v in notes.get('addressed_upstream_commit', {}).items()}
+
+
+def addressed_where(n):
+    """'in WanGP v19.25 `0e0a06f6`' — the release of the app that first carried upstream's own copy.
+
+    The release is read from upstream's own version string at that commit and never typed in the notes:
+    a version typed in two places is a version that can disagree with the commit it claims. A commit this
+    clone cannot read (a scratch repository built from fixtures) simply goes unversioned.
+    """
+    sha = addressed_commit.get(int(n), '')
+    if not sha:
+        return ''
+    link = '[`%s`](https://github.com/%s/commit/%s)' % (sha, up, sha)
+    rel = upstream_version(sha)
+    if rel:
+        return 'in WanGP v%s %s' % (rel, link)
+    print('fork-pr-table: %s is not a commit this clone can read: no release is named for it' % sha,
+          file=sys.stderr)
+    return 'upstream in %s' % link
 features = notes.get('features', [])
 
 q = 'repo:%s+is:pr+author:%s' % (up, author)
@@ -211,14 +236,16 @@ L.append('')
 L += ['### Closed without merge', '| PR | Why |', '|---|---|']
 if dead_nums:
     for n in sorted(dead_nums, reverse=True):
-        why = closed_reason.get(str(n)) or 'not picked up'
+        why = closed_reason.get(str(n)) or addressed.get(n) or 'not picked up'
         for other, who in supersedes.items():
             if other == n:
                 w = info.get(who, {})
                 when = w.get('closed') or w.get('merged') or ''
                 why = 'superseded by #%d (%s%s)' % (who, w.get('state', 'open'),
                                                     ' on ' + when if when else '')
-        L.append('| [#%d](%s) | %s — %s |' % (n, info[n]['url'], info[n]['title'], why))
+        L.append('| [#%d](%s) | %s — %s%s |'
+                 % (n, info[n]['url'], info[n]['title'], why,
+                    (', ' + addressed_where(n)) if n in addressed else ''))
 else:
     del L[-2:]            # keep the heading, drop the empty table
     L.append('*(none — nothing of mine has been closed without merge as of %s)*' % today)
@@ -388,21 +415,37 @@ for f in features:
     F.append('')
 
 claimed = {n for f in features for n in f['prs']}
-F += ['## Also in this fork', '', '| Feature | What it does | Upstream |', '|---|---|---|']
+# A pull request noted as addressed upstream that the API still calls open (or merged) is a note ahead of
+# the truth: the page may not claim a fix upstream has not written, so it is left out and said out loud.
+for n in sorted(addressed):
+    if n in info and info[n]['state'] != 'closed':
+        print('fork-pr-table: #%d is noted as addressed upstream but reads %s on the API: the note is ahead'
+              % (n, info[n]['state']), file=sys.stderr)
+addressed_nums = [n for n in sorted(addressed) if n in info and info[n]['state'] == 'closed']
+F += ['## Also in this fork', '', '| Feature | What it does | Upstream pull request |', '|---|---|---|']
 for n in [x for x in sorted(open_nums, key=rank) if x not in claimed] \
-        + [x for x in sorted(merged_nums, key=rank) if x not in claimed]:
+        + [x for x in sorted(merged_nums, key=rank) if x not in claimed] \
+        + [x for x in sorted(addressed_nums, key=rank) if x not in claimed]:
     note = prs.get(str(n)) or {}
     title = note.get('short') or '**add a short title in scripts/fork-pr-notes.json** (%s)' % info[n]['title']
     what = note.get('note') or info[n]['title']
     link = '[#%d](%s)' % (n, info[n]['url'])
-    state = link + (' **Merged** ![merged](%s) %s' % (GREEN, info[n]['merged'])
-                    if info[n]['state'] == 'merged' else ' open')
+    if info[n]['state'] == 'merged':
+        state = link + ' **Merged** ![merged](%s) %s' % (GREEN, info[n]['merged'])
+    elif n in addressed_nums:
+        state = link + (' **addressed upstream, not merged** ![addressed upstream](%s) %s'
+                        % (AMBER, addressed_where(n)))
+    else:
+        state = link + ' open'
     F.append('| %s | %s | %s |' % (title, what, state))
-F += ['', wrap('The table lists what is **open upstream** and what upstream has **accepted**, the latter '
-               'as **Merged** ![merged](%s). A pull request closed without merging is not a feature of this '
-               'fork, so it is not listed here; [docs/FORK.md](docs/FORK.md) keeps those with their reason, '
-               'as the licence record asks, and it is regenerated from the GitHub API on every publish.'
-               % GREEN), '']
+F += ['', wrap('The table lists what is **open upstream**, what upstream has **accepted** — the latter as '
+               '**Merged** ![merged](%s) — and the pull requests upstream answered by writing the same fix '
+               'itself, which are closed rather than left hanging as **addressed upstream, not merged** '
+               '![addressed upstream](%s), named by the upstream commit and the WanGP release that carry '
+               'that copy. Any other pull request closed without merging is not a feature of this fork, so '
+               'it is not listed here; [docs/FORK.md](docs/FORK.md) keeps those with their reason, as the '
+               'licence record asks, and it is regenerated from the GitHub API on every publish.'
+               % (GREEN, AMBER)), '']
 if new_entries:
     F += ["## What's new in this fork", '', new_entries, '']
 F += [sec['closing'], '',

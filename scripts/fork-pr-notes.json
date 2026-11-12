@@ -68,6 +68,15 @@
     "2286": "not picked up; the builder script stays in this fork",
     "2565": "the fix is upstream's own: the 3D update of 2026-11-03 rewrote that credits line with the escape"
   },
+  "addressed_upstream_comment": "Pull requests closed because upstream wrote the same fix itself, and never merged mine. They stay on the front page's table with that state, since the fork no longer needs them: 'note' is the reason the ledger gives, and 'addressed_upstream_commit' names upstream's own commit, whose WanGP release the generator reads from wgp.py at that commit rather than typing it here.",
+  "addressed_upstream": {
+    "2600": "the fix is upstream's own: it renames audio_cfg_scalecale to audio_cfg_scale in the same three lines of models/wan/ovi_fusion_engine.py, so the Audio Guidance setting reaches Ovi",
+    "2482": "the fix is upstream's own: it normalises an empty track in _prepare_audio_array to the frame-first shape this pull request gave it in write_wav_file, which leaves the guard added here unreachable"
+  },
+  "addressed_upstream_commit": {
+    "2600": "0e0a06f6",
+    "2482": "16bab9e2"
+  },
   "fork_only": [
     {
       "area": "dlss",

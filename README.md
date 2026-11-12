@@ -15,7 +15,7 @@ licence are the upstream project's, and upstream is the canonical project: see [
 This repository is **not affiliated with, sponsored or endorsed** by the upstream author.
 
 The `main` branch here is an integration branch: current upstream, plus my own work — **117 files,
-+17 006 lines**, 126 authored commits, synced with upstream `c8d47da2` (WanGP v19.291). Everything
++17 005 lines**, 127 authored commits, synced with upstream `c8d47da2` (WanGP v19.291). Everything
 general enough is submitted upstream, which means the 3 features below are **not in an official
 WanGP release today**.
 
@@ -136,7 +136,7 @@ frames.
 
 ## Also in this fork
 
-| Feature | What it does | Upstream |
+| Feature | What it does | Upstream pull request |
 |---|---|---|
 | SpargeAttn on CUDA 13 | SpargeAttn install on Linux with CUDA 13 for RTX 30XX-50XX | [#2284](https://github.com/deepbeepmeep/WanGP/pull/2284) open |
 | LTX-2 compilation fix | Keep LTX-2 on CUDA Graph and stop the minutes-long first steps of PyTorch compilation; the Inductor cache of a session is kept and its shapes capped. The copy in this fork carries the measured RTX 5090 timings in docs/MODELS.md; its code lines are identical | [#2551](https://github.com/deepbeepmeep/WanGP/pull/2551) open |
@@ -146,16 +146,19 @@ frames.
 | Blank Source Video | Video continuation task with an empty Source Video dividing the frame count by zero after the model loaded, instead of asking for the file | [#2639](https://github.com/deepbeepmeep/WanGP/pull/2639) open |
 | Sliding window up to 999 frames | Sliding Window sizes up to 999 frames for every video model | [#2288](https://github.com/deepbeepmeep/WanGP/pull/2288) open |
 | x264 MJPEG codec | x264 MJPEG (intra-frame-only) video codec option | [#2287](https://github.com/deepbeepmeep/WanGP/pull/2287) open |
-| Ovi Audio Guidance | Audio Guidance setting ignored by Ovi generations, which ran at a fixed 4.0 | [#2600](https://github.com/deepbeepmeep/WanGP/pull/2600) open |
-| Empty-audio crash | Crash when saving audio that came out empty | [#2482](https://github.com/deepbeepmeep/WanGP/pull/2482) open |
 | “Continue Video” joins | “Continue Video” audio joins when the soundtrack ends early | [#2478](https://github.com/deepbeepmeep/WanGP/pull/2478) open |
 | Live shell after Ctrl+C | Shell prompt left dead after Ctrl+C in a WanGP run | [#2526](https://github.com/deepbeepmeep/WanGP/pull/2526) open |
+| Ovi Audio Guidance | Audio Guidance setting ignored by Ovi generations, which ran at a fixed 4.0 | [#2600](https://github.com/deepbeepmeep/WanGP/pull/2600) **addressed upstream, not merged** ![addressed upstream](https://img.shields.io/badge/addressed%20upstream-orange) in WanGP v19.25 [`0e0a06f6`](https://github.com/deepbeepmeep/WanGP/commit/0e0a06f6) |
+| Empty-audio crash | Crash when saving audio that came out empty | [#2482](https://github.com/deepbeepmeep/WanGP/pull/2482) **addressed upstream, not merged** ![addressed upstream](https://img.shields.io/badge/addressed%20upstream-orange) in WanGP v18.19 [`16bab9e2`](https://github.com/deepbeepmeep/WanGP/commit/16bab9e2) |
 
-The table lists what is **open upstream** and what upstream has **accepted**, the latter as
-**Merged** ![merged](https://img.shields.io/badge/merged-brightgreen). A pull request closed without
-merging is not a feature of this fork, so it is not listed here; [docs/FORK.md](docs/FORK.md) keeps
-those with their reason, as the licence record asks, and it is regenerated from the GitHub API on
-every publish.
+The table lists what is **open upstream**, what upstream has **accepted** — the latter as **Merged**
+![merged](https://img.shields.io/badge/merged-brightgreen) — and the pull requests upstream answered
+by writing the same fix itself, which are closed rather than left hanging as **addressed upstream,
+not merged** ![addressed upstream](https://img.shields.io/badge/addressed%20upstream-orange), named
+by the upstream commit and the WanGP release that carry that copy. Any other pull request closed
+without merging is not a feature of this fork, so it is not listed here;
+[docs/FORK.md](docs/FORK.md) keeps those with their reason, as the licence record asks, and it is
+regenerated from the GitHub API on every publish.
 
 ## What's new in this fork
 
@@ -182,7 +185,7 @@ way keeps them.
 > their dates in **[docs/FORK.md](docs/FORK.md)**, and keeps the upstream licence, the in-tree notices and the
 > [third-party licence texts](docs/third_party_licenses/).
 
-<!-- front page: regenerated 2026-11-12 · 117 files +17006 lines · 126 authored commits · 16 open, 0 merged upstream -->
+<!-- front page: regenerated 2026-11-13 · 117 files +17005 lines · 127 authored commits · 14 open, 0 merged upstream -->
 <!-- END GENERATED -->
 
 -----
