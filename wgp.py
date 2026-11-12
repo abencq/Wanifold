@@ -8542,7 +8542,11 @@ def generate_media(
         video_source_duration = 0
     # A continued Source Video stays in its file, only its last frames being read, unless its frames are processed with the new ones
     loaded_source_plan = continued_video = None
-    continued_source = video_source is not None and image_start is None and not (is_image or audio_only)
+    # A *From latent* branch is not one of those continuations: its kept run comes from the latent file and the Source Video only lends its
+    # prefix frames, so the branch reads them in memory. keep_frames names a run of pictures in the file that the latent cut never asks for,
+    # and a job gathering both would write its head twice.
+    continued_source = (video_source is not None and image_start is None and branch_latent_info is None
+                        and not (is_image or audio_only))
     if continued_source:
         loaded_source_plan =video_continuation.loaded_source_plan(video_source, keep_frames_video_source, fps, video_length, max_source_video_frames, temporal_upsampling=temporal_upsampling, spatial_upsampling=spatial_upsampling, film_grain=film_grain_intensity > 0, hdr="&" in video_prompt_type, frames_returned=api_return_video_uint8 or return_flashvsr_continue_cache)
         if loaded_source_plan is not None:
@@ -10015,7 +10019,9 @@ def generate_media(
                         # remove sliding window overlapped frames at the beginning of the generation
                         sample = torch.cat([ prefix_video, sample[: , source_video_overlap_frames_count:]], dim = 1)
                         _spliced_prefix_frames = int(prefix_video.shape[1])
-                    else:
+                    elif not source_stays_in_file:
+                        # A Source Video that stays in its file is already ahead of the sample in that file: prefixing it here would
+                        # write its last frames twice. Only a prefix that is held in memory (a start frame, a whole read) is joined in.
                         # remove source video overlapped frames at the beginning of the generation if there is only a start frame
                         if (window_prefix_is_image and not fake_start_image
                                 and not sample_is_hdr
