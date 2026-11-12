@@ -160,7 +160,7 @@ def music_beats(path, *, audio_track_no=1, start_time=0.0, duration=None):
     limit = MAX_BEAT_SECONDS + 1 if duration is None else min(duration, MAX_BEAT_SECONDS + 1)
     command = [_get_ffmpeg_path(), "-nostdin", "-hide_banner", "-loglevel", "error", "-ss", str(start_time), "-i", str(path), "-t", str(limit),
                "-map", f"0:a:{audio_track_no - 1}", "-vn", "-ac", "1", "-ar", str(BEAT_RATE), "-f", "f32le", "pipe:1"]
-    completed = subprocess.run(command, capture_output=True)
+    completed = subprocess.run(command, capture_output=True, **child_kwargs())
     if completed.returncode:
         raise ValueError(f"Audio decoding failed: {completed.stderr.decode(errors='replace')[-1500:]}")
     samples, fps = np.frombuffer(completed.stdout, dtype="<f4"), BEAT_RATE / BEAT_HOP
