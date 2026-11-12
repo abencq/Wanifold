@@ -4,7 +4,7 @@
 # Wan2GP — unofficial fork of WanGP
 
 [![fork of WanGP](https://img.shields.io/badge/fork_of-WanGP-blue)](https://github.com/deepbeepmeep/WanGP)
-![synced with upstream](https://img.shields.io/badge/synced_with_upstream-bd1ff590-orange)
+![synced with upstream](https://img.shields.io/badge/synced_with_upstream-c8d47da2-orange)
 ![upstream PRs open](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fapi.github.com%2Fsearch%2Fissues%3Fq%3Drepo%3Adeepbeepmeep%2FWanGP%2Bis%3Apr%2Bauthor%3Aabencq%2Bis%3Aopen&query=%24.total_count&label=upstream%20PRs%20open&color=blue)
 ![upstream PRs merged](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fapi.github.com%2Fsearch%2Fissues%3Fq%3Drepo%3Adeepbeepmeep%2FWanGP%2Bis%3Apr%2Bauthor%3Aabencq%2Bis%3Amerged&query=%24.total_count&label=upstream%20PRs%20merged&color=blue)
 
@@ -14,8 +14,8 @@ still named Wan2GP, and this repository keeps that name. The app, its name, its 
 licence are the upstream project's, and upstream is the canonical project: see [wangp.ai](https://wangp.ai).
 This repository is **not affiliated with, sponsored or endorsed** by the upstream author.
 
-The `main` branch here is an integration branch: current upstream, plus my own work — **104 files,
-+15 523 lines**, 96 authored commits, synced with upstream `bd1ff590` (WanGP v19.14). Everything
+The `main` branch here is an integration branch: current upstream, plus my own work — **117 files,
++17 006 lines**, 126 authored commits, synced with upstream `c8d47da2` (WanGP v19.291). Everything
 general enough is submitted upstream, which means the 3 features below are **not in an official
 WanGP release today**.
 
@@ -72,11 +72,7 @@ my_shot_latent.pt        python -c "import torch; d = torch.load('my_shot_latent
   re-run the original generation first. The kept part of a branch is rebuilt from the latent file and
   never copied from the video — the video is only a viewing copy of what the file holds — so when
   that file cannot be decoded for the job, the branch stops and says why instead of continuing on
-  the video's frames. Run the job without the latent file to continue from the video. On the models
-  that re-denoise the overlap around the cut — LTX2, the Wan i2v / TI2V classes, the Wan
-  text-to-video classes, Ovi, Magi Human and LongCat Video — that overlap is rebuilt the same way:
-  the file's frames are decoded and re-encoded onto the new window, so a branch of one of those
-  files reads no frame from the video at all and goes ahead with the video deleted.
+  the video's frames. Run the job without the latent file to continue from the video.
 
 - **Not covered:** the older LTX (0.9 / 1.0) builds its video in two stages, and its decode may add
   noise, so a re-decode would only be an approximation of the original. Hunyuan is not covered,
@@ -147,6 +143,7 @@ frames.
 | Sol-Attn for LTX-2 | Optional Sol-Attn sparse self-attention for native LTX-2 inference (experimental) | [#2289](https://github.com/deepbeepmeep/WanGP/pull/2289) open |
 | Prompt enhancer on GGUF | Prompt enhancer crash with Auto Speculative Decoding on GGUF | [#2553](https://github.com/deepbeepmeep/WanGP/pull/2553) open |
 | Console time stamps | Time stamps at the start of the console lines WanGP prints, on the lines the terminal draws only | [#2568](https://github.com/deepbeepmeep/WanGP/pull/2568) open |
+| Blank Source Video | Video continuation task with an empty Source Video dividing the frame count by zero after the model loaded, instead of asking for the file | [#2639](https://github.com/deepbeepmeep/WanGP/pull/2639) open |
 | Sliding window up to 999 frames | Sliding Window sizes up to 999 frames for every video model | [#2288](https://github.com/deepbeepmeep/WanGP/pull/2288) open |
 | x264 MJPEG codec | x264 MJPEG (intra-frame-only) video codec option | [#2287](https://github.com/deepbeepmeep/WanGP/pull/2287) open |
 | Ovi Audio Guidance | Audio Guidance setting ignored by Ovi generations, which ran at a fixed 4.0 | [#2600](https://github.com/deepbeepmeep/WanGP/pull/2600) open |
@@ -185,7 +182,7 @@ way keeps them.
 > their dates in **[docs/FORK.md](docs/FORK.md)**, and keeps the upstream licence, the in-tree notices and the
 > [third-party licence texts](docs/third_party_licenses/).
 
-<!-- front page: regenerated 2026-11-05 · 104 files +15523 lines · 96 authored commits · 15 open, 0 merged upstream -->
+<!-- front page: regenerated 2026-11-12 · 117 files +17006 lines · 126 authored commits · 16 open, 0 merged upstream -->
 <!-- END GENERATED -->
 
 -----

@@ -60,7 +60,8 @@
     "2478": { "area": "audio", "short": "“Continue Video” joins", "short": "“Continue Video” joins",     "note": "\u201cContinue Video\u201d audio joins when the soundtrack ends early" },
     "2526": { "area": "shell", "short": "Live shell after Ctrl+C", "short": "Live shell after Ctrl+C",     "note": "Shell prompt left dead after Ctrl+C in a WanGP run" },
     "2565": { "area": "shell", "short": "Silent startup", "short": "Silent startup",     "note": "SyntaxWarning printed at startup by the About tab credits line" },
-    "2600": { "area": "audio", "short": "Ovi Audio Guidance", "note": "Audio Guidance setting ignored by Ovi generations, which ran at a fixed 4.0" }
+    "2600": { "area": "audio", "short": "Ovi Audio Guidance", "note": "Audio Guidance setting ignored by Ovi generations, which ran at a fixed 4.0" },
+    "2639": { "area": "video", "short": "Blank Source Video", "note": "Video continuation task with an empty Source Video dividing the frame count by zero after the model loaded, instead of asking for the file" }
   },
   "closed_reason": {
     "2295": "superseded by #2535 (2026-10-24)",
