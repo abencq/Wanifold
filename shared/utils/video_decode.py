@@ -107,7 +107,7 @@ def picture_duration(video_path):
     """Seconds a video's picture lasts: its sound may run past its last frame (a model's audio tail, codec padding). mkv/webm keep it
     in a stream tag; a file stating neither gives only its whole length."""
     command = [_resolve_media_binary("ffprobe"), "-v", "error", "-show_entries", "stream=codec_type,duration:stream_tags=DURATION:format=duration", "-of", "json", os.fspath(video_path)]
-    probe = json.loads(subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="ignore", check=True).stdout)
+    probe = json.loads(subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="ignore", check=True, **child_kwargs()).stdout)
     video = next((stream for stream in probe.get("streams", []) if stream.get("codec_type") == "video"), {})
     return _parse_media_duration(video.get("duration") or (video.get("tags") or {}).get("DURATION") or (probe.get("format") or {}).get("duration"), 0.0) or None
 

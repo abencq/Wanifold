@@ -826,7 +826,7 @@ def video_stream_facts(video_path):
     announced) and when its picture starts inside the file (a sound track can shift it)."""
     command = [_ffprobe_binary(), "-v", "error", "-select_streams", "v:0", "-count_packets", "-show_data_hash", "md5",
                "-show_entries", "stream=codec_name,profile,pix_fmt,width,height,extradata_hash,nb_read_packets,start_time:format=start_time", "-of", "json", os.fspath(video_path)]
-    probe = json.loads(subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="ignore", check=True).stdout)
+    probe = json.loads(subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="ignore", check=True, **child_kwargs()).stdout)
     stream, start_times = probe["streams"][0], []
     for value in (stream.get("start_time"), probe["format"].get("start_time")):
         try:
@@ -850,7 +850,7 @@ def join_video_streams(video_paths, frame_counts, fps, output_path, picture_star
     try:
         # auto_convert 0: the pictures keep their bytes (the demuxer would otherwise write the encoder's parameter sets again in each key frame)
         result = subprocess.run([_ffmpeg_binary(), "-y", "-v", "error", "-f", "concat", "-safe", "0", "-auto_convert", "0", "-i", listing, "-map", "0:v:0", "-c", "copy", os.fspath(output_path)],
-                                capture_output=True, text=True, encoding="utf-8", errors="replace")
+                                capture_output=True, text=True, encoding="utf-8", errors="replace", **child_kwargs())
     finally:
         os.remove(listing)
     if result.returncode != 0:
