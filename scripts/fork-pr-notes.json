@@ -61,7 +61,8 @@
     "2526": { "area": "shell", "short": "Live shell after Ctrl+C", "short": "Live shell after Ctrl+C",     "note": "Shell prompt left dead after Ctrl+C in a WanGP run" },
     "2565": { "area": "shell", "short": "Silent startup", "short": "Silent startup",     "note": "SyntaxWarning printed at startup by the About tab credits line" },
     "2600": { "area": "audio", "short": "Ovi Audio Guidance", "note": "Audio Guidance setting ignored by Ovi generations, which ran at a fixed 4.0" },
-    "2639": { "area": "video", "short": "Blank Source Video", "note": "Video continuation task with an empty Source Video dividing the frame count by zero after the model loaded, instead of asking for the file" }
+    "2639": { "area": "video", "short": "Blank Source Video", "note": "Video continuation task with an empty Source Video dividing the frame count by zero after the model loaded, instead of asking for the file" },
+    "2640": { "area": "shell", "short": "Helper programs and the terminal", "note": "ffmpeg, ffprobe and the other helper programs WanGP starts are given no keyboard and a process group of their own, so a program that reads the keyboard cannot leave the shell prompt dead" }
   },
   "closed_reason": {
     "2295": "superseded by #2535 (2026-10-24)",

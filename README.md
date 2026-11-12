@@ -15,7 +15,7 @@ licence are the upstream project's, and upstream is the canonical project: see [
 This repository is **not affiliated with, sponsored or endorsed** by the upstream author.
 
 The `main` branch here is an integration branch: current upstream, plus my own work — **117 files,
-+17 005 lines**, 127 authored commits, synced with upstream `c8d47da2` (WanGP v19.291). Everything
++17 072 lines**, 128 authored commits, synced with upstream `c8d47da2` (WanGP v19.291). Everything
 general enough is submitted upstream, which means the 3 features below are **not in an official
 WanGP release today**.
 
@@ -147,6 +147,7 @@ frames.
 | Sliding window up to 999 frames | Sliding Window sizes up to 999 frames for every video model | [#2288](https://github.com/deepbeepmeep/WanGP/pull/2288) open |
 | x264 MJPEG codec | x264 MJPEG (intra-frame-only) video codec option | [#2287](https://github.com/deepbeepmeep/WanGP/pull/2287) open |
 | “Continue Video” joins | “Continue Video” audio joins when the soundtrack ends early | [#2478](https://github.com/deepbeepmeep/WanGP/pull/2478) open |
+| Helper programs and the terminal | ffmpeg, ffprobe and the other helper programs WanGP starts are given no keyboard and a process group of their own, so a program that reads the keyboard cannot leave the shell prompt dead | [#2640](https://github.com/deepbeepmeep/WanGP/pull/2640) open |
 | Live shell after Ctrl+C | Shell prompt left dead after Ctrl+C in a WanGP run | [#2526](https://github.com/deepbeepmeep/WanGP/pull/2526) open |
 | Ovi Audio Guidance | Audio Guidance setting ignored by Ovi generations, which ran at a fixed 4.0 | [#2600](https://github.com/deepbeepmeep/WanGP/pull/2600) **addressed upstream, not merged** ![addressed upstream](https://img.shields.io/badge/addressed%20upstream-orange) in WanGP v19.25 [`0e0a06f6`](https://github.com/deepbeepmeep/WanGP/commit/0e0a06f6) |
 | Empty-audio crash | Crash when saving audio that came out empty | [#2482](https://github.com/deepbeepmeep/WanGP/pull/2482) **addressed upstream, not merged** ![addressed upstream](https://img.shields.io/badge/addressed%20upstream-orange) in WanGP v18.19 [`16bab9e2`](https://github.com/deepbeepmeep/WanGP/commit/16bab9e2) |
@@ -185,7 +186,7 @@ way keeps them.
 > their dates in **[docs/FORK.md](docs/FORK.md)**, and keeps the upstream licence, the in-tree notices and the
 > [third-party licence texts](docs/third_party_licenses/).
 
-<!-- front page: regenerated 2026-11-13 · 117 files +17005 lines · 127 authored commits · 14 open, 0 merged upstream -->
+<!-- front page: regenerated 2026-11-13 · 117 files +17072 lines · 128 authored commits · 15 open, 0 merged upstream -->
 <!-- END GENERATED -->
 
 -----
