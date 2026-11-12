@@ -46,12 +46,12 @@ _STATE = {
     "handlers": [],
 }
 
-# The settings a terminal needs before a person can type in it. Ctrl+C is a signal (iflags), the rest
-# are the line discipline and the output fixes (oflags / lflags); everything the user set is left as is.
-_GUARD_IFLAGS = termios.ISIG if _POSIX else 0
+# The settings a terminal needs before a person can type in it. Ctrl+C is a local flag (ISIG belongs
+# with ICANON and ECHO, not in the input flags), and the newline fixes are output flags; everything
+# else the user set -- including the input flags -- is left as it is.
 _GUARD_OFLAGS = termios.OPOST if _POSIX else 0
-_GUARD_LFLAGS = (termios.ICANON | termios.ECHO | termios.ECHOCTL | termios.ECHOE | termios.ECHOKE |
-                 termios.IEXTEN) if _POSIX else 0
+_GUARD_LFLAGS = (termios.ISIG | termios.ICANON | termios.ECHO | termios.ECHOCTL | termios.ECHOE |
+                 termios.ECHOKE | termios.IEXTEN) if _POSIX else 0
 
 _READ_IFLAGS = ("BRKINT", "ICRNL", "INPCK", "ISTRIP", "IXON", "IXANY", "IXOFF", "IMAXBEL", "IUTF8")
 _READ_OFLAGS = ("OPOST", "ONLCR", "OCRNL", "ONOCR", "ONLSTRIP")
@@ -92,7 +92,6 @@ def _read_flags():
 def _typable(attrs):
     """The same settings with the flags a terminal needs to be typed in switched back on."""
     attrs = list(attrs)
-    attrs[0] = attrs[0] | _GUARD_IFLAGS
     attrs[1] = attrs[1] | _GUARD_OFLAGS
     attrs[3] = attrs[3] | _GUARD_LFLAGS
     return attrs
