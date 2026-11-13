@@ -15,7 +15,7 @@ licence are the upstream project's, and upstream is the canonical project: see [
 This repository is **not affiliated with, sponsored or endorsed** by the upstream author.
 
 The `main` branch here is an integration branch: current upstream, plus my own work — **117 files,
-+17 075 lines**, 131 authored commits, synced with upstream `38758d3c` (WanGP v19.292). Everything
++17 075 lines**, 132 authored commits, synced with upstream `38758d3c` (WanGP v19.292). Everything
 general enough is submitted upstream, which means the 3 features below are **not in an official
 WanGP release today**.
 
@@ -138,7 +138,7 @@ frames.
 
 | Feature | What it does | Upstream pull request |
 |---|---|---|
-| SpargeAttn on CUDA 13 | SpargeAttn install on Linux with CUDA 13 for RTX 30XX-50XX | [#2284](https://github.com/deepbeepmeep/WanGP/pull/2284) open |
+| SpargeAttn source build | SpargeAttn builds from source on Linux with CUDA 13 for the Python versions the prebuilt cp311 wheel does not cover; upstream wheel stays | [#2284](https://github.com/deepbeepmeep/WanGP/pull/2284) open |
 | LTX-2 compilation fix | Keep LTX-2 on CUDA Graph and stop the minutes-long first steps of PyTorch compilation; the Inductor cache of a session is kept and its shapes capped. The copy in this fork carries the measured RTX 5090 timings in docs/MODELS.md; its code lines are identical | [#2551](https://github.com/deepbeepmeep/WanGP/pull/2551) open |
 | Sol-Attn for LTX-2 | Optional Sol-Attn sparse self-attention for native LTX-2 inference (experimental) | [#2289](https://github.com/deepbeepmeep/WanGP/pull/2289) open |
 | Prompt enhancer on GGUF | Prompt enhancement keeps loading when Auto cannot size the drafter: where WanGP cannot read the drafter, Auto decides on the model's own size instead of the prompt enhancer failing to start | [#2553](https://github.com/deepbeepmeep/WanGP/pull/2553) open |
@@ -186,7 +186,7 @@ way keeps them.
 > their dates in **[docs/FORK.md](docs/FORK.md)**, and keeps the upstream licence, the in-tree notices and the
 > [third-party licence texts](docs/third_party_licenses/).
 
-<!-- front page: regenerated 2026-11-13 · 117 files +17075 lines · 131 authored commits · 15 open, 0 merged upstream -->
+<!-- front page: regenerated 2026-11-13 · 117 files +17075 lines · 132 authored commits · 15 open, 0 merged upstream -->
 <!-- END GENERATED -->
 
 -----
