@@ -14,9 +14,11 @@
 # The scenarios asserted: an acceptance shipped in a release, an acceptance not yet in one and a
 # closure, everything open as it is today, every feature shipped, the status callout that rides with a
 # feature this fork is still reworking and leaves when upstream takes it whole, the closed pull request
-# upstream answered by writing the same fix inside a larger change of its own, and the What's new entries
-# of the front page, which disappear when their word file is empty. Nothing is fetched, nothing is pushed,
-# and the repository this script lives in is not written to.
+# upstream answered by writing the same fix inside a larger change of its own, the front page holding
+# nothing but this fork (no copy of upstream's landing page is kept anywhere), the long form of a row,
+# which the ledger keeps and the front page leaves off, and the sentence naming where upstream has got to
+# once the fetched ref sits past the commit this branch is merged with. Nothing is fetched, nothing is
+# pushed, and the repository this script lives in is not written to.
 set -uo pipefail
 SRC=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 SCRATCH=${SCRATCH:-/tmp/fork-fixture-$$}
@@ -47,7 +49,10 @@ printf '# third party notices\n' > THIRD.md
 git add -A && git commit -qm 'upstream at v18.10'
 printf '# 2292 accepted\n' > naming.py && git add -A && git commit -qm 'merge of #2292, in v18.10'
 M18=$(git rev-parse HEAD)
-printf 'WanGP_version = "19.02"\n' > wgp.py && git commit -qam 'upstream at v19.02'
+# Upstream's own landing page exists at the sync commit, because that is the case the fork has to live
+# with: upstream keeps writing this file, about fifty times a year, for other people's features.
+printf '# WanGP\n\nThe landing page upstream writes and rewrites.\n\nMade with love by DeepBeepMeep\n' > README.md
+printf 'WanGP_version = "19.02"\n' > wgp.py && git add -A && git commit -qm 'upstream at v19.02'
 U2=$(git rev-parse HEAD)
 printf '# latent io\n' > latent_io.py && git add -A && git commit -qm 'merge of #2441, in v19.02'
 M19=$(git rev-parse HEAD)
@@ -60,7 +65,7 @@ mkdir -p scripts/git-hooks docs
 cp "$SRC/scripts/fork-pr-table.sh" "$SRC/scripts/fork-pr-notes.json" scripts/
 cp "$SRC/scripts/git-hooks/pre-push" "$SRC/scripts/git-hooks/pre-push.py" scripts/git-hooks/
 cp "$SRC/scripts/publish-main.sh" "$SRC/scripts/page-hunk-check.sh" "$SRC/scripts/install-fork-hooks.sh" scripts/
-cp "$SRC/docs/fork-features.md" "$SRC/docs/fork-new.md" "$SRC/docs/FORK.md" docs/
+cp "$SRC/docs/fork-features.md" "$SRC/docs/FORK.md" docs/
 cp "$SRC/README.md" README.md
 git add -A && git commit -qm 'the fork: the pages and the scripts that write them'
 git checkout -q -B local
@@ -126,7 +131,8 @@ gen
 want docs/FORK.md "synced with upstream \`$SHORT\` (WanGP v19.02)" 'a fetch leaves the licence statement on the commit the branch carries'
 wantnt docs/FORK.md "\`$NEWSHORT\`" 'the fetched commit is claimed by neither page'
 want README.md "synced_with_upstream-$SHORT" 'the front-page badge stays on the sync point'
-want README.md "synced with upstream \`$SHORT\` (WanGP v19.02)" 'the headline stays on the sync point'
+want README.md "[\`$SHORT\`](https://github.com/deepbeepmeep/WanGP/commit/$U2) (WanGP v19.02)" \
+  'the headline links the commit this branch is merged with, and names its release'
 flat "$SCRATCH/gen.log" | grep -qF 'past the sync point' && ok 'the generator says the sync is due' \
   || { bad 'the generator stayed quiet about the sync'; sed 's/^/  /' "$SCRATCH/gen.log"; }
 printf 'refs/heads/local %s refs/heads/main %s\n' "$(git rev-parse HEAD)" "$(git rev-parse HEAD)" \
@@ -161,8 +167,9 @@ want README.md 'the 3 features below are **not in an official WanGP release toda
 wantnt README.md 'in an official WanGP release** (' 'no version is named when nothing is shipped'
 want docs/FORK.md '*(none yet' 'the merged table keeps its empty note'
 want README.md ', so today this needs the fork' 'an open feature says the fork is needed'
-want README.md "## What's new in this fork" "the What's new section sits on the front page"
-want README.md '| Continue Video (MiniMax H3) |' 'the table lists the joins entry'
+wantnt README.md "## What's new in this fork" 'the front page keeps no separate list of new work'
+flat "$SCRATCH/gen.log" | grep -qF 'described twice' && bad 'a change is described twice on the page' \
+  || ok 'nothing is described twice on the front page'
 want README.md 'Not covered' 'the latents section keeps the release-note detail'
 want README.md 'This feature is **being reworked**: refactored, improved and fixed' \
   'a feature still being reworked says so under its own heading'
@@ -191,11 +198,79 @@ wantnt docs/FORK.md '*(none — nothing of mine has been closed without merge' '
 want README.md 'the 3 features below are **not in an official WanGP release today**' 'a closure moves no release claim'
 check && ok 'the pages read back' || { bad 'the read-back'; sed 's/^/  /' "$SCRATCH/check.log"; }
 
-echo '=== 5. the Unreleased entries are empty ==='
-: > docs/fork-new.md
-scenario '{}' '[]' "no What's new entries"
-wantnt README.md "## What's new in this fork" 'an empty word file draws no section'
+echo '=== 5. the front page holds only this fork, and a change is said once ==='
+# README.md is this fork's own front page and nothing else. No copy of upstream's landing page is kept in
+# this repository, so the note that used to point at one must not come back, and nothing at all may follow
+# the block the generator wrote — not a paragraph, not a blank line.
 check && ok 'the pages read back' || { bad 'the read-back'; sed 's/^/  /' "$SCRATCH/check.log"; }
+wantnt README.md "Upstream's own page." 'the front page ends without a note about upstream and its copy'
+wantnt README.md 'docs/UPSTREAM-README.md' 'no page points at a copy this fork does not keep'
+wantnt README.md "## What's new in this fork" 'the front page carries no second list of changes'
+[ "$(tail -n 1 README.md)" = '<!-- END GENERATED -->' ] \
+  && ok 'the front page ends at its generated block' || bad 'something follows the generated block'
+
+# The long form of a row belongs to the ledger, so a change is described once on the page a reader lands
+# on. The scratch copy of the notes is edited, not the one in the source tree.
+python3 - <<'PY'
+import json, pathlib
+p = pathlib.Path('scripts/fork-pr-notes.json')
+d = json.loads(p.read_text(encoding='utf-8'))
+d['prs']['2441']['detail'] = 'A long form that belongs to the ledger alone.'
+p.write_text(json.dumps(d, indent=2) + '\n', encoding='utf-8')
+PY
+gen
+want docs/FORK.md 'A long form that belongs to the ledger alone' 'the ledger carries the long form'
+wantnt README.md 'A long form that belongs to the ledger alone' 'the front page keeps only the short form'
+
+# Two descriptions of one pull request are two sentences that can disagree, so the generator says so. The
+# short title is what the front-page table prints, so that is where a second description would appear.
+python3 - <<'PY'
+import json, pathlib
+p = pathlib.Path('scripts/fork-pr-notes.json')
+d = json.loads(p.read_text(encoding='utf-8'))
+d['prs']['2565']['short'] += ' ([PR #2565](https://github.com/deepbeepmeep/WanGP/pull/2565))'
+p.write_text(json.dumps(d, indent=2) + '\n', encoding='utf-8')
+PY
+gen
+flat "$SCRATCH/gen.log" | grep -qF '#2565 described twice' && ok 'a change described twice is said out loud' \
+  || { bad 'the duplicate mention goes unheard'; sed 's/^/  /' "$SCRATCH/gen.log"; }
+git checkout -- scripts/fork-pr-notes.json
+gen
+flat "$SCRATCH/gen.log" | grep -qF 'described twice' && bad 'the warning outlives the duplicate' \
+  || ok 'the warning goes when the duplicate does'
+check && ok 'the pages read back' || { bad 'the read-back'; sed 's/^/  /' "$SCRATCH/check.log"; }
+
+echo '=== 6. upstream moving past the sync point ==='
+# The headline sentence names the commit this branch is merged with. Once the fetched ref sits past it, the
+# page names the commit upstream has got to as well: a reader who cannot see the distance cannot tell a
+# synced branch from a stale one, and the licence sentence must go on naming the commit the branch carries.
+# Catching up here is a rewind of the ref rather than a merge — what is under test is the sentence, and the
+# merge itself is rehearsed by scripts/fork-checks/scratch-clone.sh.
+git checkout -q -- README.md docs/FORK.md
+git checkout -q "$U2"
+printf 'WanGP_version = "19.03"\n' > wgp.py
+printf '# WanGP\n\nUpstream rewrote its own landing page again.\n' > README.md
+git add -A && git commit -qm 'upstream at v19.03, past the sync point'
+U3=$(git rev-parse HEAD)
+U3SHORT=$(git rev-parse --short "$U3")
+git checkout -q local
+git update-ref refs/remotes/origin/main "$U3"
+gen
+flat "$SCRATCH/gen.log" | grep -qF 'past the sync point' && ok 'the generator says the sync is due' \
+  || { bad 'the generator stays quiet about a branch fetched past its sync point'; sed 's/^/  /' "$SCRATCH/gen.log"; }
+want README.md "[\`$U3SHORT\`](https://github.com/deepbeepmeep/WanGP/commit/$U3)" \
+  'the page links the commit upstream has got to'
+want README.md 'upstream is 1 commit further on at' 'the page says how far upstream has moved'
+want README.md '(WanGP v19.03)' 'the commit upstream has got to is named by its release too'
+want README.md "[\`$SHORT\`](https://github.com/deepbeepmeep/WanGP/commit/$U2)" \
+  'the commit this branch is merged with keeps being named'
+want docs/FORK.md "synced with upstream \`$SHORT\`" 'the licence sentence does not run ahead of the merge'
+check && ok 'the pages read back with upstream ahead' \
+  || { bad 'the read-back with upstream ahead'; sed 's/^/  /' "$SCRATCH/check.log"; }
+git update-ref refs/remotes/origin/main "$U2"
+gen
+wantnt README.md 'further on at' 'the sentence goes when the branch is up to date again'
+check && ok 'the pages read back once more' || { bad 'the read-back'; sed 's/^/  /' "$SCRATCH/check.log"; }
 
 cd / && rm -rf "$SCRATCH"
 echo

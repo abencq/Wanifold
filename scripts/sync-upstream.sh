@@ -15,9 +15,9 @@
 #      takes theirs without consulting any driver, and this script puts the fork's page back into the
 #      merge. Nothing is lost either way, because the page is derived: it is written by
 #      scripts/fork-pr-table.sh from the commit this branch ends up sitting on.
-#   3. the copy of upstream's own page. docs/UPSTREAM-README.md holds it verbatim as of the commit the
-#      fork is on, read from that commit rather than merged. Nothing can be lost in it; it can only be
-#      left behind, and the refresh below re-copies it.
+#   3. nothing else. This repository keeps no copy of upstream's landing page, so a sync leaves no third
+#      file to reconcile: upstream's page is upstream's, at the commit the merge lands on, and that
+#      commit is in this repository.
 #
 # Nothing is committed beyond the merge itself. The refreshed pages land in the working tree for
 # git publish-main to take out with whatever else is pending.
@@ -112,5 +112,5 @@ if [ -n "$took_theirs" ]; then
 elif git diff --quiet "$before" HEAD -- README.md; then
   say 'README.md came out of the merge as it went in'
 fi
-say 'README.md, docs/FORK.md and docs/UPSTREAM-README.md are refreshed in the working tree'
+say 'README.md and docs/FORK.md are refreshed in the working tree'
 say 'read them, then git publish-main takes them out with the rest'

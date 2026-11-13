@@ -6,13 +6,13 @@
 #   git config alias.publish-main, alias.fork-refresh, alias.sync-upstream
 #   git config merge.ours.driver true, with "README.md merge=ours" in .git/info/attributes
 #     README.md is this fork's generated front page and nothing else, while upstream rewrites its own
-#     README about fifty times a year. Keeping ours on a merge loses nothing: upstream's page is never
-#     merged here, it is read from the upstream commit this branch sits on and written to
-#     docs/UPSTREAM-README.md. One caveat, and scripts/sync-upstream.sh handles it: a merge driver is
-#     consulted only when both sides changed the file, so when upstream alone rewrote it git takes
-#     theirs, and the script puts this fork's page back into the merge. The rule is git state of this
-#     clone rather than a committed .gitattributes, so it cannot collide with upstream's own attributes
-#     -- and it is silently absent from a clone that never ran this script, which is why
+#     README about fifty times a year. Keeping ours on a merge loses nothing: upstream's page is not
+#     merged here at all, and no copy of it is kept in this repository -- the upstream commit this branch
+#     sits on carries it, and that copy cannot go stale. One caveat, and scripts/sync-upstream.sh handles
+#     it: a merge driver is consulted only when both sides changed the file, so when upstream alone
+#     rewrote it git takes theirs, and the script puts this fork's page back into the merge. The rule is
+#     git state of this clone rather than a committed .gitattributes, so it cannot collide with upstream's
+#     own attributes -- and it is silently absent from a clone that never ran this script, which is why
 #     scripts/fork-checks/scratch-clone.sh looks for it.
 #   git config pull.rebase false
 #     a rebase swaps ours and theirs, so the rule above would then throw away this fork's page and keep
@@ -32,7 +32,7 @@ chmod +x scripts/git-hooks/pre-push scripts/git-hooks/pre-push.py \
 
 git config core.hooksPath scripts/git-hooks
 git config alias.publish-main '!cd "$(git rev-parse --show-toplevel)" && scripts/publish-main.sh'
-git config alias.fork-refresh '!cd "$(git rev-parse --show-toplevel)" && scripts/fork-pr-table.sh && git --no-pager diff --stat -- README.md docs/FORK.md docs/UPSTREAM-README.md'
+git config alias.fork-refresh '!cd "$(git rev-parse --show-toplevel)" && scripts/fork-pr-table.sh && git --no-pager diff --stat -- README.md docs/FORK.md'
 git config alias.sync-upstream '!cd "$(git rev-parse --show-toplevel)" && scripts/sync-upstream.sh'
 echo 'install: hooksPath = ' "$(git config core.hooksPath)"
 echo 'install: aliases   = publish-main, fork-refresh, sync-upstream (repository only)'

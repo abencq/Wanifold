@@ -22,6 +22,10 @@ import sys
 root = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else '.').resolve()
 REF = 'refs/remotes/origin/main'
 WORDS = ['docs/fork-features.md', 'scripts/fork-pr-notes.json', 'scripts/fork-pr-table.sh']
+# The two pages the generator writes are not fork work, and the generator leaves them out of the size it
+# prints: the same rule here, or this reminder nags about the difference between two numbers that mean
+# the same thing.
+NOT_FORK_WORK = ('README.md', 'docs/FORK.md')
 
 # git hands the refs to push on stdin; an empty stdin means the push carries nothing to do.
 if not sys.stdin.read().strip():
@@ -56,14 +60,14 @@ if not git('rev-parse', '--verify', '--quiet', REF):
     sys.exit(0)                     # no upstream ref in this clone: nothing to compare against
 
 stamp, files, adds, commits = stamp.group(1), int(stamp.group(2)), int(stamp.group(3)), int(stamp.group(4))
-names = [l for l in git('diff', '--name-only', '%s...HEAD' % REF).splitlines() if l.strip()]
+keep = ['--', '.'] + [':(exclude)%s' % p for p in NOT_FORK_WORK]
+names = [l for l in git('diff', '--name-only', '%s...HEAD' % REF, *keep).splitlines() if l.strip()]
 live_adds = 0
-for line in git('diff', '--numstat', '%s...HEAD' % REF).splitlines():
+for line in git('diff', '--numstat', '%s...HEAD' % REF, *keep).splitlines():
     parts = line.split('\t')
     if len(parts) > 1 and parts[0].isdigit():
         live_adds += int(parts[0])
-live_commits = git('rev-list', '--count', '--author=%s' % author, '--no-merges', '%s...HEAD' % REF,
-                   '--', '.', ':(exclude)README.md', ':(exclude)docs/FORK.md')
+live_commits = git('rev-list', '--count', '--author=%s' % author, '--no-merges', '%s...HEAD' % REF, *keep)
 live = (len(names), live_adds, int(live_commits) if live_commits.isdigit() else None)
 
 if live != (files, adds, commits):

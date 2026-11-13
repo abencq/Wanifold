@@ -37,11 +37,20 @@ header, not a claim of separate ownership.
   table on its own.
 - The pages write themselves. [scripts/fork-pr-table.sh](../scripts/fork-pr-table.sh) counts this fork
   against upstream, reads the state of every pull request from the GitHub API, and assembles the tables
-  below and the front page of the [README](../README.md). The wording of a row is in
-  [scripts/fork-pr-notes.json](../scripts/fork-pr-notes.json), the sentences of the front page in
-  [docs/fork-features.md](fork-features.md), the What's new entries of the front page in
-  [docs/fork-new.md](fork-new.md). Nothing between the `BEGIN GENERATED` markers of the
-  two pages is written by hand, and a pull request with no note shows up as a loud **TODO** row.
+  below and the [README](../README.md), which is nothing but its generated front page. The wording of a
+  row is in [scripts/fork-pr-notes.json](../scripts/fork-pr-notes.json) — `note` the short form, which
+  both pages print, and `detail` the long form, which only this ledger carries — and the sentences of the
+  front page are in [docs/fork-features.md](fork-features.md). Nothing between the `BEGIN GENERATED`
+  markers of the two pages is written by hand, and a pull request with no note shows up as a loud
+  **TODO** row.
+- Upstream's own landing page is on neither page, and no copy of it is kept in this repository. Upstream
+  rewrites its README about fifty times a year for other people's features, and pasting that text under
+  this fork's block made every one of them a decision about words that are not ours. So the front page
+  holds only this fork, and upstream's page stays upstream's, at the commit named above — which this
+  repository carries, so what upstream said then is one `git show` away and cannot be a stale copy of
+  itself. [scripts/sync-upstream.sh](../scripts/sync-upstream.sh) — `git sync-upstream` — does the merge,
+  keeps this fork's page in it by the rule in `.git/info/attributes`, and stops on any conflict in a real
+  file.
 - The sentence above naming the upstream commit this fork sits on is written by that same script,
   between the inline `<!-- SYNCED -->` markers, because a statement of what was modified is only true
   of the commit it names. The commit it names is the newest upstream commit this branch carries, and
@@ -103,13 +112,13 @@ worker) are the ones the upstream documentation describes, made to work on Linux
 | LTX-2 | Keep LTX-2 on CUDA Graph and stop the minutes-long first steps of PyTorch compilation; the Inductor cache of a session is kept and its shapes capped. The copy in this fork carries the measured RTX 5090 timings in docs/MODELS.md; its code lines are identical | [#2551](https://github.com/deepbeepmeep/WanGP/pull/2551) | open · clean · 24 behind |
 | LTX-2 | Optional Sol-Attn sparse self-attention for native LTX-2 inference (experimental) | [#2289](https://github.com/deepbeepmeep/WanGP/pull/2289) | open · clean · 30 behind |
 | Prompt enhancer | Prompt enhancement keeps loading when Auto cannot size the drafter: where WanGP cannot read the drafter, Auto decides on the model's own size instead of the prompt enhancer failing to start | [#2553](https://github.com/deepbeepmeep/WanGP/pull/2553) | open · clean · 0 behind |
-| Console | Time stamps at the start of the console lines WanGP prints, on the lines the terminal draws only | [#2568](https://github.com/deepbeepmeep/WanGP/pull/2568) | open · clean · 28 behind |
+| Console | Time stamps at the start of the console lines WanGP prints, on the lines the terminal draws only Lines are stamped with real, local, millisecond time, and the lines of an inference are stamped and logged in order at the moment they are written, so the console says what WanGP is doing and when. Each console stream now owns its buffer and is written out as one indivisible block: a line is no longer broken mid-row, no longer loses its carriage returns, and no longer leaves its cursor, colour and progress bar on the screen after WanGP quits. | [#2568](https://github.com/deepbeepmeep/WanGP/pull/2568) | open · clean · 28 behind |
 | Video | Video continuation task with an empty Source Video dividing the frame count by zero after the model loaded, instead of asking for the file | [#2639](https://github.com/deepbeepmeep/WanGP/pull/2639) | open · clean · 1 behind |
 | Video | Sliding Window sizes up to 999 frames for every video model | [#2288](https://github.com/deepbeepmeep/WanGP/pull/2288) | open · clean · 38 behind |
 | Video | x264 MJPEG (intra-frame-only) video codec option | [#2287](https://github.com/deepbeepmeep/WanGP/pull/2287) | open · clean · 177 behind |
-| Audio | “Continue Video” audio joins when the soundtrack ends early | [#2478](https://github.com/deepbeepmeep/WanGP/pull/2478) | open · clean · 1 behind |
+| Audio | “Continue Video” audio joins when the soundtrack ends early Continuing a video no longer stops when its soundtrack ends a little before the last frame: WanGP asks the model for no more of that closing audio than the frames it can regenerate, and keeps the source audio up to where it ends, so the joins between sliding windows keep their timing. | [#2478](https://github.com/deepbeepmeep/WanGP/pull/2478) | open · clean · 1 behind |
 | Shell & UI | ffmpeg, ffprobe and the other helper programs WanGP starts are given no keyboard and a process group of their own, so a program that reads the keyboard cannot leave the shell prompt dead | [#2640](https://github.com/deepbeepmeep/WanGP/pull/2640) | open · clean · 1 behind |
-| Shell & UI | Shell prompt left dead after Ctrl+C in a WanGP run | [#2526](https://github.com/deepbeepmeep/WanGP/pull/2526) | open · clean · 1 behind |
+| Shell & UI | Shell prompt left dead after Ctrl+C in a WanGP run WanGP takes the terminal as it finds it and returns it in that state: at the end of a run, on Ctrl+C, on *Save and Quit* and on *Restart*, on Windows as well, and it repairs a terminal that arrives broken. The ffmpeg and TTS helper programs read the keyboard on the terminal they share with the shell and turn echo, line editing and Ctrl+C off, so a run that ends on one of them leaves the shell prompt dead with `reset` the only way back. A `--console-guard` option leaves the terminal alone for a setup that owns the terminal already; it defaults to on. | [#2526](https://github.com/deepbeepmeep/WanGP/pull/2526) | open · clean · 1 behind |
 
 ### Only in this fork, not submitted
 | Area | What it does |

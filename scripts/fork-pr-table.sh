@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
 # scripts/fork-pr-table.sh -- regenerate this fork's own pages from git and from the GitHub API.
 #
-#   scripts/fork-pr-table.sh          rewrite docs/FORK.md and the front page block of README.md
-#   scripts/fork-pr-table.sh --check  exit 1 when either file is not up to date
+#   scripts/fork-pr-table.sh          rewrite README.md and docs/FORK.md
+#   scripts/fork-pr-table.sh --check  exit 1 when one of the two is not up to date
 #
-# docs/FORK.md   the ledger: the state of my pull requests, in tables, between the markers.
-# README.md      the front page: the size of the fork from git, the features of docs/fork-features.md
-#                with the live state of their pull requests, the table of the pull requests that are
-#                open upstream, and the What's new entries of docs/fork-new.md. Between its own
-#                markers; the words live in those two files.
+# docs/FORK.md             the ledger: the state of my pull requests, in tables, between the markers.
+# README.md                the front page, written whole: the size of the fork from git, the features of
+#                          docs/fork-features.md with the live state of their pull requests, and the
+#                          table of the pull requests that are open upstream. Everything on it is about
+#                          this fork; no word of upstream's landing page is mixed into it, and none of it
+#                          is copied here either. Upstream's page stays upstream's, at the commit the
+#                          front page names: this repository carries that commit, so the copy a reader
+#                          wants is one `git show` away, and it cannot be a stale second hand of it.
 #
 # The hand-written wording is scripts/fork-pr-notes.json (the rows, the features, the short titles)
 # and docs/fork-features.md (the sentences of the front page). New pull requests, closures and
@@ -39,15 +42,18 @@ if [ "$MODE" = write ] && [ -n "${FORK_TABLE_SKIP:-}" ]; then
 fi
 export FORK_TABLE_MODE="$MODE"
 exec python3 - <<'PY'
-import datetime, json, os, re, subprocess, sys, textwrap
+import collections, datetime, json, os, re, subprocess, sys, textwrap
 
 root = subprocess.run(['git', 'rev-parse', '--show-toplevel'],
                       capture_output=True, text=True).stdout.strip()
 notes_file = os.path.join(root, 'scripts', 'fork-pr-notes.json')
 features_file = os.path.join(root, 'docs', 'fork-features.md')
-new_file = os.path.join(root, 'docs', 'fork-new.md')
 ledger = os.path.join(root, 'docs', 'FORK.md')
 front = os.path.join(root, 'README.md')
+# The two pages this script writes are not this fork's work: the size on the front page counts the code
+# the fork added, not the generated prose that describes it, and it stopped counting upstream's page the
+# day the fork stopped copying it.
+NOT_FORK_WORK = ('README.md', 'docs/FORK.md')
 mode = os.environ['FORK_TABLE_MODE']
 fixtures = os.environ.get('FORK_TABLE_FIXTURES')   # a dir holding api.json: then no network at all
 BEGIN, END = '<!-- BEGIN GENERATED', '<!-- END GENERATED -->'
@@ -55,6 +61,9 @@ SYNC_BEGIN, SYNC_END = '<!-- SYNCED -->', '<!-- /SYNCED -->'
 GREEN = 'https://img.shields.io/badge/merged-brightgreen'
 AMBER = 'https://img.shields.io/badge/addressed%20upstream-orange'
 REF = 'refs/remotes/origin/main'
+# scripts/fork-checks rehearses a sync against a bare repository in /tmp, and points both this script
+# and scripts/sync-upstream.sh at the ref the rehearsal calls upstream.
+REF = os.environ.get('FORK_UPSTREAM_REF') or REF
 
 def gh(path):
     """One GitHub API call, or one entry of a fixture map when FORK_TABLE_FIXTURES is set."""
@@ -219,6 +228,8 @@ for n in sorted(open_nums, key=rank):
     text = note['note'] if note else '**add a note for this PR in scripts/fork-pr-notes.json** (%s)' % info[n]['title']
     if note and note.get('wip'):    # still being reworked here: the ledger says it in the front page's words
         text = '**Being reworked: %s**, and not verified against current upstream. %s' % (note['wip'], text)
+    if note and note.get('detail'):  # the long form of a row: the ledger carries it, the front page the short
+        text += ' ' + note['detail']
     L.append(row(area, text + sup(n), n))
 L.append('')
 
@@ -268,10 +279,13 @@ def fork_size():
     The commits are counted without merges, so a sync with upstream cannot inflate them, and
     without the commits that only refresh the two generated pages: publishing the page is not
     work, and a headline number that moves every time it is published is never true of anything.
+    The copy of upstream's landing page is excluded by name: the fork claims no authorship of it,
+    and a headline that grew every time upstream rewrote its own page would measure upstream.
     """
-    names = [l for l in git('diff', '--name-only', '%s...HEAD' % REF).splitlines() if l.strip()]
+    keep = ['--', '.'] + [':(exclude)%s' % p for p in NOT_FORK_WORK]
+    names = [l for l in git('diff', '--name-only', '%s...HEAD' % REF, *keep).splitlines() if l.strip()]
     adds = dels = 0
-    for line in git('diff', '--numstat', '%s...HEAD' % REF).splitlines():
+    for line in git('diff', '--numstat', '%s...HEAD' % REF, *keep).splitlines():
         p = line.split('\t')
         if len(p) > 1:
             adds += int(p[0]) if p[0].isdigit() else 0
@@ -359,15 +373,27 @@ def feature_bullets(f):
     return out
 
 sec = sections()
-new_entries = ''
-if os.path.exists(new_file):
-    # the What's new entries of the front page: the generator drops the section when the word file
-    # is empty, so the front page never keeps an empty heading
-    new_entries = open(new_file, encoding='utf-8').read().strip('\n')
 files_n, adds_n, dels_n, commits_n = fork_size()
 claim = notes.get('front_claim_sentence',
                   'Everything general enough is submitted upstream, which means')
-synced = 'synced with upstream `%s`%s' % (tip, ' (WanGP v%s)' % tip_version if tip_version else '')
+def commit_link(short, full):
+    """A commit the way the page names it: the short sha, clickable on the upstream repository."""
+    return '[`%s`](https://github.com/%s/commit/%s)' % (short, up, full)
+
+
+# The sentence names two commits when it may: the one this branch is merged with, and — once the fetched
+# upstream ref sits past it — the one upstream has got to. A reader who cannot see the distance cannot
+# tell a synced branch from a stale one, and a sync is worth asking about while it is due. The ref is a
+# local one, so the distance is the one the last fetch or `git sync-upstream` left behind.
+synced = 'synced with upstream %s%s' % (
+    commit_link(tip, sync), ' (WanGP v%s)' % tip_version if tip_version else '')
+if behind:
+    head_tip = git('rev-parse', '--short', REF)
+    head_full = git('rev-parse', REF)
+    head_version = upstream_version(head_full)
+    synced += '; upstream is %s commit%s further on at %s%s' % (
+        num(behind), '' if behind == 1 else 's', commit_link(head_tip, head_full),
+        ' (WanGP v%s)' % head_version if head_version else '')
 
 
 def release_claim():
@@ -399,8 +425,11 @@ SHIELDS_MERGED = ('![upstream PRs merged](https://img.shields.io/badge/dynamic/j
                   'author%3Aabencq%2Bis%3Amerged&query=%24.total_count&label=upstream%20PRs%20merged&color=blue)')
 
 F = ['<!-- BEGIN GENERATED (front page) by scripts/fork-pr-table.sh -- do not edit between the markers;',
-     '     the words are docs/fork-features.md and docs/fork-new.md, the size comes from git,',
-     '     the states from the API -->',
+     '     the words are docs/fork-features.md and scripts/fork-pr-notes.json, the size comes from',
+     "     git and the states from the GitHub API. Everything on this page is this fork's own: upstream",
+     '     writes its own landing page upstream and this repository copies none of it, so the upstream',
+     '     commit the branch is merged with is named below, and it carries the only copy that can be',
+     '     trusted to say what upstream said then -->',
      '# Wan2GP — unofficial fork of WanGP', '',
      '[![fork of WanGP](https://img.shields.io/badge/fork_of-WanGP-blue)](https://github.com/deepbeepmeep/WanGP)',
      '![synced with upstream](https://img.shields.io/badge/synced_with_upstream-%s-orange)' % tip,
@@ -476,13 +505,20 @@ F += ['', wrap('The table lists what is **open upstream**, what upstream has **a
                'it is not listed here; [docs/FORK.md](docs/FORK.md) keeps those with their reason, as the '
                'licence record asks, and it is regenerated from the GitHub API on every publish.'
                % (GREEN, AMBER)), '']
-if new_entries:
-    F += ["## What's new in this fork", '', new_entries, '']
-F += [sec['closing'], '',
-      '<!-- front page: regenerated %s · %s files +%s lines · %s authored commits · %d open, %d merged upstream -->'
+F += [sec['closing'], '']
+F += ['<!-- front page: regenerated %s · %s files +%s lines · %s authored commits · %d open, %d merged upstream -->'
       % (today, files_n, adds_n, commits_n, len(open_nums), len(merged_nums)),
       '<!-- END GENERATED -->']
 front_block = '\n'.join(F)
+
+# One change is described once on the front page — in a feature section, in a row of the table, or in the
+# licence note, not in two of them. Two descriptions of one pull request are two sentences written at
+# different times that can disagree, and the reader cannot tell which one the fork still stands behind.
+mentioned = collections.Counter(re.findall(r'/pull/(\d+)', front_block))
+twice = sorted(n for n, times in mentioned.items() if times > 1)
+if twice:
+    print('fork-pr-table: %s described twice on the front page: one change, one description'
+          % ' and '.join('#%s' % n for n in twice), file=sys.stderr)
 
 def sync_paragraph():
     """The sentence of the licence record that names the commit this fork sits on.
@@ -518,6 +554,13 @@ def rewrite(path, new_block):
                  % os.path.relpath(path, root))
     if path == front and cur[:i].strip():
         sys.exit('fork-pr-table: the front page block must start at the top of README.md')
+    if path == front:
+        # The front page is written whole, and nothing follows the block: upstream's own page used to sit
+        # below it, reconciled by hand at every sync, and no copy of it is kept in this repository now.
+        if cur[j + len(END):].strip():
+            print("fork-pr-table: what is below the block of README.md is dropped: upstream writes its "
+                  'own landing page upstream, and this fork copies none of it', file=sys.stderr)
+        return cur, cur[:i] + new_block + '\n'
     tail = cur[j + len(END):].lstrip('\n')
     while tail.startswith(END):
         tail = tail[len(END):].lstrip('\n')     # the block brings its own END
@@ -532,7 +575,7 @@ def clone_reminder():
     missing = []
     if git('config', '--get', 'core.hooksPath') != 'scripts/git-hooks':
         missing.append('core.hooksPath')
-    for a in ('publish-main', 'fork-refresh'):
+    for a in ('publish-main', 'fork-refresh', 'sync-upstream'):
         if not git('config', '--get', 'alias.' + a):
             missing.append('alias.' + a)
     skills = os.path.expanduser(os.environ.get('SKILLS_DIR', '~/.config/Code/User/skills'))
@@ -552,12 +595,13 @@ for path, new_block in ((ledger, block), (front, front_block)):
         open(path, 'w', encoding='utf-8').write(new)
         wrote.append(os.path.relpath(path, root))
         print('fork-pr-table: %s rewritten' % wrote[-1])
+pages = 'README.md and docs/FORK.md'
 if mode == 'check':
     if stale:
         sys.exit('fork-pr-table: out of date: %s — run scripts/fork-pr-table.sh' % ', '.join(stale))
-    print('fork-pr-table: docs/FORK.md and README.md are up to date')
+    print('fork-pr-table: %s are up to date' % pages)
 elif not wrote:
-    print('fork-pr-table: docs/FORK.md and README.md already up to date')
+    print('fork-pr-table: %s are already up to date' % pages)
 
 missing = clone_reminder()
 if missing:
