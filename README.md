@@ -1,7 +1,9 @@
 <!-- BEGIN GENERATED (front page) by scripts/fork-pr-table.sh -- do not edit between the markers;
      the words are docs/fork-features.md and scripts/fork-pr-notes.json, the size comes from
-     git and the states from the GitHub API. Nothing here is upstream's own page: that copy is
-     kept in docs/UPSTREAM-README.md, written from the commit this fork sits on -->
+     git and the states from the GitHub API. Everything on this page is this fork's own: upstream
+     writes its own landing page upstream and this repository copies none of it, so the upstream
+     commit the branch is merged with is named below, and it carries the only copy that can be
+     trusted to say what upstream said then -->
 # Wan2GP — unofficial fork of WanGP
 
 [![fork of WanGP](https://img.shields.io/badge/fork_of-WanGP-blue)](https://github.com/deepbeepmeep/WanGP)
@@ -16,9 +18,10 @@ licence are the upstream project's, and upstream is the canonical project: see [
 This repository is **not affiliated with, sponsored or endorsed** by the upstream author.
 
 The `main` branch here is an integration branch: current upstream, plus my own work — **115 files,
-+17 058 lines**, 135 authored commits, synced with upstream `38758d3c` (WanGP v19.292). Everything
-general enough is submitted upstream, which means the 3 features below are **not in an official
-WanGP release today**.
++17 062 lines**, 135 authored commits, synced with upstream
+[`38758d3c`](https://github.com/deepbeepmeep/WanGP/commit/38758d3c73366422efcf609abb63cab8385f3552)
+(WanGP v19.292). Everything general enough is submitted upstream, which means the 3 features below
+are **not in an official WanGP release today**.
 
 ## Latent saving, decoding and branching
 
@@ -175,10 +178,5 @@ way keeps them.
 > their dates in **[docs/FORK.md](docs/FORK.md)**, and keeps the upstream licence, the in-tree notices and the
 > [third-party licence texts](docs/third_party_licenses/).
 
-**Upstream's own page.** Everything above is this fork. Upstream writes its own landing page, and it
-is kept verbatim in [docs/UPSTREAM-README.md](docs/UPSTREAM-README.md) as of upstream `38758d3c`
-(WanGP v19.292), read from that commit on every run: this page stays about what this fork adds, the
-copy stays what upstream says, and neither has to be merged into the other.
-
-<!-- front page: regenerated 2026-11-13 · 115 files +17058 lines · 135 authored commits · 15 open, 0 merged upstream -->
+<!-- front page: regenerated 2026-11-13 · 115 files +17062 lines · 135 authored commits · 15 open, 0 merged upstream -->
 <!-- END GENERATED -->
