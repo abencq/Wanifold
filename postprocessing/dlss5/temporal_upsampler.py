@@ -170,6 +170,11 @@ class DLSSGTemporalUpsampler(api.SimpleScaleSuffixMixin):
             "description": "NVIDIA DLSS Frame Generation using video motion estimation. Every installed worker is listed separately: the upstream worker (Windows x2-x4 plus capability-gated x5/x6 on RTX 50 series, requiring Windows 11, HAGS, and RTX 40 or newer; native Linux x2 with the NVIDIA Vulkan driver) and, on Linux, the native multi-multiplier worker shown with the range it supports here. The native range omits x2 when a usable upstream entry already offers it, and an x2-only native worker is hidden from the menus while that upstream entry works, keeping its multipliers, its validation and any saved selection that uses it. The choice is made per generation with no restart and no environment variable. See docs/DLSS5.md.",
         }
 
+    def query_chunking(self, temporal_upsampling):
+        """How a long video goes through this upsampler a chunk at a time (postprocessing.chunking)."""
+        from postprocessing.system_upsampler_handler import DLSSG_HANDLER
+        return DLSSG_HANDLER
+
     def validate_upsampling(self, temporal_upsampling, *, source_is_image=False):
         split = self.split_value(temporal_upsampling)
         if split is None or split[1] not in self.MULTIPLIERS:

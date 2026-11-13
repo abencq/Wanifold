@@ -28,7 +28,7 @@ def get_system_handler(name: str | None) -> Any:
         from postprocessing.ltx2_upsampler.process_handler import REFINER_HANDLER
         return REFINER_HANDLER
     if name in ("rife", "dlssg", "dlss5"):
-        from .system_upsampler_handler import DLSS5_HANDLER, DLSSG_HANDLER, RIFE_HANDLER
+        from postprocessing.system_upsampler_handler import DLSS5_HANDLER, DLSSG_HANDLER, RIFE_HANDLER
         return {"rife": RIFE_HANDLER, "dlssg": DLSSG_HANDLER, "dlss5": DLSS5_HANDLER}[name]
     if name == "latent_decode":
         from .latent_process_handler import LATENT_DECODE_HANDLER
