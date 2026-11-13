@@ -21,6 +21,10 @@ WanGP release today**.
 
 ## Latent saving, decoding and branching
 
+> **Status.** This feature is **being reworked**: refactored, improved and fixed. It is **not
+> verified against current upstream** (`38758d3c`), so treat it as this fork's development branch
+> rather than a released feature; where it stands upstream is given at the end of this section.
+
 **What it is.** Keep the latents a generation produced, saved as a companion latent file along the
 traditional video and audio output, and reuse them: decode them again, or continue from them.
 Wan 2.1/2.2, LongCat, LTX-2, MiniMax H3, Magi Human and Ovi.
@@ -151,15 +155,16 @@ frames.
 | Live shell after Ctrl+C | Shell prompt left dead after Ctrl+C in a WanGP run | [#2526](https://github.com/deepbeepmeep/WanGP/pull/2526) open |
 | Ovi Audio Guidance | Audio Guidance setting ignored by Ovi generations, which ran at a fixed 4.0 | [#2600](https://github.com/deepbeepmeep/WanGP/pull/2600) **addressed upstream, not merged** ![addressed upstream](https://img.shields.io/badge/addressed%20upstream-orange) in WanGP v19.25 [`0e0a06f6`](https://github.com/deepbeepmeep/WanGP/commit/0e0a06f6) |
 | Empty-audio crash | Crash when saving audio that came out empty | [#2482](https://github.com/deepbeepmeep/WanGP/pull/2482) **addressed upstream, not merged** ![addressed upstream](https://img.shields.io/badge/addressed%20upstream-orange) in WanGP v18.19 [`16bab9e2`](https://github.com/deepbeepmeep/WanGP/commit/16bab9e2) |
+| Silent startup | SyntaxWarning printed at startup by the About tab credits line | [#2565](https://github.com/deepbeepmeep/WanGP/pull/2565) **addressed upstream, not merged** ![addressed upstream](https://img.shields.io/badge/addressed%20upstream-orange) in upstream's own 3D update of 2026-11-03 |
 
 The table lists what is **open upstream**, what upstream has **accepted** — the latter as **Merged**
 ![merged](https://img.shields.io/badge/merged-brightgreen) — and the pull requests upstream answered
 by writing the same fix itself, which are closed rather than left hanging as **addressed upstream,
 not merged** ![addressed upstream](https://img.shields.io/badge/addressed%20upstream-orange), named
-by the upstream commit and the WanGP release that carry that copy. Any other pull request closed
-without merging is not a feature of this fork, so it is not listed here;
-[docs/FORK.md](docs/FORK.md) keeps those with their reason, as the licence record asks, and it is
-regenerated from the GitHub API on every publish.
+by the upstream commit and the WanGP release that carry that copy, or, when upstream wrote it inside
+a larger change of its own, by that change. Any other pull request closed without merging is not a
+feature of this fork, so it is not listed here; [docs/FORK.md](docs/FORK.md) keeps those with their
+reason, as the licence record asks, and it is regenerated from the GitHub API on every publish.
 
 ## What's new in this fork
 

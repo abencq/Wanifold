@@ -108,6 +108,9 @@ closed_reason, fork_only = notes.get('closed_reason', {}), notes.get('fork_only'
 # is the answer a reader of this page came for; the note is also the reason the ledger's closed row gives.
 addressed = {int(k): v for k, v in notes.get('addressed_upstream', {}).items()}
 addressed_commit = {int(k): v for k, v in notes.get('addressed_upstream_commit', {}).items()}
+# A fix upstream wrote inside a larger change of its own has no commit that carries only it. Such a row
+# names that change instead: the same honesty told at a coarser grain, and never a badge left unexplained.
+addressed_when = {int(k): v for k, v in notes.get('addressed_upstream_when', {}).items()}
 
 
 def addressed_where(n):
@@ -115,11 +118,12 @@ def addressed_where(n):
 
     The release is read from upstream's own version string at that commit and never typed in the notes:
     a version typed in two places is a version that can disagree with the commit it claims. A commit this
-    clone cannot read (a scratch repository built from fixtures) simply goes unversioned.
+    clone cannot read (a scratch repository built from fixtures) simply goes unversioned. A fix upstream
+    wrote inside a larger change of its own has no commit to name and is placed by the notes instead.
     """
     sha = addressed_commit.get(int(n), '')
     if not sha:
-        return ''
+        return addressed_when.get(int(n), '')
     link = '[`%s`](https://github.com/%s/commit/%s)' % (sha, up, sha)
     rel = upstream_version(sha)
     if rel:
@@ -213,6 +217,8 @@ for n in sorted(open_nums, key=rank):
     note = prs.get(str(n))
     area = areas.get(note['area'], note['area']) if note else '**TODO**'
     text = note['note'] if note else '**add a note for this PR in scripts/fork-pr-notes.json** (%s)' % info[n]['title']
+    if note and note.get('wip'):    # still being reworked here: the ledger says it in the front page's words
+        text = '**Being reworked: %s**, and not verified against current upstream. %s' % (note['wip'], text)
     L.append(row(area, text + sup(n), n))
 L.append('')
 
@@ -278,6 +284,10 @@ def wrap(text, width=100):
     """A generated sentence, wrapped like the prose around it; a bullet keeps its indent."""
     bullet = text.startswith('- ')
     return textwrap.fill(text, width=width, subsequent_indent='  ' if bullet else '')
+
+def quote(text, width=98):
+    """A generated sentence set as a blockquote, so every one of its lines carries its '> ' marker."""
+    return textwrap.fill(text, width=width, initial_indent='> ', subsequent_indent='> ')
 
 def sections():
     """docs/fork-features.md, split on its own directives: intro, each feature, closing."""
@@ -398,8 +408,27 @@ F = ['<!-- BEGIN GENERATED (front page) by scripts/fork-pr-table.sh -- do not ed
      wrap('The `main` branch here is an integration branch: current upstream, plus my own work — '
           '**%s files, +%s lines**, %s authored commits, %s. %s %s.'
           % (num(files_n), num(adds_n), commits_n, synced, claim.rstrip('.'), release_claim())), '']
+def wip_callout(f):
+    """The line a section carries while its feature is still being reworked in this fork.
+
+    The state sentence closing a section is about upstream; this one is about how far this fork's own copy
+    can be trusted today, so it goes under the heading, where the reader meets it before using the feature.
+    A feature upstream has taken whole is no longer this fork's to call unfinished, so the line goes with
+    the acceptance; a rework that merely ends is retired from scripts/fork-pr-notes.json like any note.
+    """
+    if all(info[n]['state'] == 'merged' for n in f['prs']):
+        return []
+    wips = [prs[str(n)]['wip'] for n in f['prs'] if prs.get(str(n), {}).get('wip')]
+    if not wips:
+        return []
+    return [quote('**Status.** This feature is **being reworked**: %s. It is **not verified against current '
+                  'upstream** (`%s`), so treat it as this fork\'s development branch rather than a released '
+                  'feature; where it stands upstream is given at the end of this section.'
+                  % (', '.join(wips), tip)), '']
+
 for f in features:
     F += ['## ' + f['title'], '']
+    F += wip_callout(f)
     for ln in sec.get('feature: ' + f['id'], '').splitlines():
         s = ln.strip()
         if s == '<!-- image -->':
@@ -442,7 +471,8 @@ F += ['', wrap('The table lists what is **open upstream**, what upstream has **a
                '**Merged** ![merged](%s) — and the pull requests upstream answered by writing the same fix '
                'itself, which are closed rather than left hanging as **addressed upstream, not merged** '
                '![addressed upstream](%s), named by the upstream commit and the WanGP release that carry '
-               'that copy. Any other pull request closed without merging is not a feature of this fork, so '
+               'that copy, or, when upstream wrote it inside a larger change of its own, by that change. '
+               'Any other pull request closed without merging is not a feature of this fork, so '
                'it is not listed here; [docs/FORK.md](docs/FORK.md) keeps those with their reason, as the '
                'licence record asks, and it is regenerated from the GitHub API on every publish.'
                % (GREEN, AMBER)), '']

@@ -43,7 +43,7 @@
   ],
   "front_claim_sentence": "Everything general enough is submitted upstream, which means",
   "prs": {
-    "2441": { "area": "latents",   "note": "Save, decode and branch latents for Wan, LongCat, LTX-2, MiniMax H3, Magi Human and Ovi; pick a latent file straight from a video. **Being reworked, and not verified against current upstream**: upstream has rewritten 14 of its 26 files since it branched, four of them no longer merge, and the splice into the MiniMax H3 transformer still merges quietly into the 58 lines upstream deleted there" },
+    "2441": { "area": "latents",   "wip": "refactored, improved and fixed", "note": "Save, decode and branch latents for Wan, LongCat, LTX-2, MiniMax H3, Magi Human and Ovi; pick a latent file straight from a video. Upstream has rewritten 14 of its 26 files since it branched, four of them no longer merge, and the splice into the MiniMax H3 transformer still merges quietly into the 58 lines upstream deleted there" },
     "2292": { "area": "filenames", "short": "the default filename", "note": "A default output filename for every model, with a template checked before the generation starts" },
     "2290": { "area": "filenames", "short": "the keywords, the format specs, the precheck", "note": "Effective-output keywords and Python format specs for the Output Filename box" },
     "2535": { "area": "dlss",      "note": "DLSS temporal upscaling at x3-x4, up to x6 on RTX 50, with the native Linux Frame Generation worker and installer" },
@@ -66,17 +66,20 @@
   },
   "closed_reason": {
     "2295": "superseded by #2535 (2026-10-24)",
-    "2286": "not picked up; the builder script stays in this fork",
-    "2565": "the fix is upstream's own: the 3D update of 2026-11-03 rewrote that credits line with the escape"
+    "2286": "not picked up; the builder script stays in this fork"
   },
-  "addressed_upstream_comment": "Pull requests closed because upstream wrote the same fix itself, and never merged mine. They stay on the front page's table with that state, since the fork no longer needs them: 'note' is the reason the ledger gives, and 'addressed_upstream_commit' names upstream's own commit, whose WanGP release the generator reads from wgp.py at that commit rather than typing it here.",
+  "addressed_upstream_comment": "Pull requests closed because upstream wrote the same fix itself, and never merged mine. They stay on the front page's table with that state, since the fork no longer needs them: 'note' is the reason the ledger gives, 'addressed_upstream_commit' names upstream's own commit, whose WanGP release the generator reads from wgp.py at that commit rather than typing it here, and 'addressed_upstream_when' places the rare case where upstream wrote the fix inside a larger change of its own and no commit carries it alone.",
   "addressed_upstream": {
     "2600": "the fix is upstream's own: it renames audio_cfg_scalecale to audio_cfg_scale in the same three lines of models/wan/ovi_fusion_engine.py, so the Audio Guidance setting reaches Ovi",
-    "2482": "the fix is upstream's own: it normalises an empty track in _prepare_audio_array to the frame-first shape this pull request gave it in write_wav_file, which leaves the guard added here unreachable"
+    "2482": "the fix is upstream's own: it normalises an empty track in _prepare_audio_array to the frame-first shape this pull request gave it in write_wav_file, which leaves the guard added here unreachable",
+    "2565": "the fix is upstream's own: the credits line was rewritten with the escape as part of a larger update"
   },
   "addressed_upstream_commit": {
     "2600": "0e0a06f6",
     "2482": "16bab9e2"
+  },
+  "addressed_upstream_when": {
+    "2565": "in upstream's own 3D update of 2026-11-03"
   },
   "fork_only": [
     {
