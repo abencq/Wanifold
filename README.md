@@ -15,7 +15,7 @@ licence are the upstream project's, and upstream is the canonical project: see [
 This repository is **not affiliated with, sponsored or endorsed** by the upstream author.
 
 The `main` branch here is an integration branch: current upstream, plus my own work — **117 files,
-+17 075 lines**, 129 authored commits, synced with upstream `c8d47da2` (WanGP v19.291). Everything
++17 075 lines**, 130 authored commits, synced with upstream `c8d47da2` (WanGP v19.291). Everything
 general enough is submitted upstream, which means the 3 features below are **not in an official
 WanGP release today**.
 
@@ -186,7 +186,7 @@ way keeps them.
 > their dates in **[docs/FORK.md](docs/FORK.md)**, and keeps the upstream licence, the in-tree notices and the
 > [third-party licence texts](docs/third_party_licenses/).
 
-<!-- front page: regenerated 2026-11-13 · 117 files +17075 lines · 129 authored commits · 15 open, 0 merged upstream -->
+<!-- front page: regenerated 2026-11-13 · 117 files +17075 lines · 130 authored commits · 15 open, 0 merged upstream -->
 <!-- END GENERATED -->
 
 -----
