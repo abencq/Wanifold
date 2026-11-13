@@ -6,7 +6,7 @@ The latent branch head: one decode of the kept region, one encode of the head.
 A branch job reads every pixel of its kept region from its own latent file - the
 companion video is a preview - and the head window starts from that region's tail
 re-encoded onto the new window's grid. Both steps are callable in / tensor out, so
-the grid arithmetic holds without a VAE (see tests/test_branch_parity.py).
+the grid arithmetic holds without a VAE.
 
 @author Richard Therriault
 """

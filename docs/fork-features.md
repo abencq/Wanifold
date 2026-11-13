@@ -19,6 +19,13 @@ because a typed claim of that kind goes false the day upstream accepts the first
 still named Wan2GP, and this repository keeps that name. The app, its name, its docs, its models and its
 licence are the upstream project's, and upstream is the canonical project: see [wangp.ai](https://wangp.ai).
 This repository is **not affiliated with, sponsored or endorsed** by the upstream author.
+
+**Tested under Linux.** This fork is run and tested on Linux, and on no other platform. Upstream's
+Windows and macOS paths are upstream's and I do not test them, so a problem that shows itself only there
+is a report I cannot reproduce. It reaches the work I submit upstream too: the frame generation worker
+here builds natively for Linux instead of running the Windows binaries under Wine, and the SpargeAttn
+build it offers is a Linux source build — those pull requests are Linux-specific by what they are, not by
+oversight.
 <!-- end -->
 
 <!-- feature: latents -->
@@ -132,8 +139,8 @@ frames.
 
 <!-- closing -->
 **Install:** as upstream — `git clone https://github.com/abencq/Wan2GP.git && cd Wan2GP && python wgp.py`
-(Windows: `run.bat`). Your models, settings and outputs are laid out as upstream puts them, so switching either
-way keeps them.
+(Windows: `run.bat`, which I have not tested). Your models, settings and outputs are laid out as upstream
+puts them, so switching either way keeps them.
 
 > Per section 4.1 of the [WanGP Community License 2.0](LICENSE.txt), this fork states its modifications and
 > their dates in **[docs/FORK.md](docs/FORK.md)**, and keeps the upstream licence, the in-tree notices and the
