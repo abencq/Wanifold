@@ -17,8 +17,15 @@ still named Wan2GP, and this repository keeps that name. The app, its name, its 
 licence are the upstream project's, and upstream is the canonical project: see [wangp.ai](https://wangp.ai).
 This repository is **not affiliated with, sponsored or endorsed** by the upstream author.
 
+**Tested under Linux.** This fork is run and tested on Linux, and on no other platform. Upstream's
+Windows and macOS paths are upstream's and I do not test them, so a problem that shows itself only there
+is a report I cannot reproduce. It reaches the work I submit upstream too: the frame generation worker
+here builds natively for Linux instead of running the Windows binaries under Wine, and the SpargeAttn
+build it offers is a Linux source build — those pull requests are Linux-specific by what they are, not by
+oversight.
+
 The `main` branch here is an integration branch: current upstream, plus my own work — **115 files,
-+17 062 lines**, 135 authored commits, synced with upstream
++17 069 lines**, 136 authored commits, synced with upstream
 [`38758d3c`](https://github.com/deepbeepmeep/WanGP/commit/38758d3c73366422efcf609abb63cab8385f3552)
 (WanGP v19.292). Everything general enough is submitted upstream, which means the 3 features below
 are **not in an official WanGP release today**.
@@ -171,12 +178,12 @@ feature of this fork, so it is not listed here; [docs/FORK.md](docs/FORK.md) kee
 reason, as the licence record asks, and it is regenerated from the GitHub API on every publish.
 
 **Install:** as upstream — `git clone https://github.com/abencq/Wan2GP.git && cd Wan2GP && python wgp.py`
-(Windows: `run.bat`). Your models, settings and outputs are laid out as upstream puts them, so switching either
-way keeps them.
+(Windows: `run.bat`, which I have not tested). Your models, settings and outputs are laid out as upstream
+puts them, so switching either way keeps them.
 
 > Per section 4.1 of the [WanGP Community License 2.0](LICENSE.txt), this fork states its modifications and
 > their dates in **[docs/FORK.md](docs/FORK.md)**, and keeps the upstream licence, the in-tree notices and the
 > [third-party licence texts](docs/third_party_licenses/).
 
-<!-- front page: regenerated 2026-11-13 · 115 files +17062 lines · 135 authored commits · 15 open, 0 merged upstream -->
+<!-- front page: regenerated 2026-11-13 · 115 files +17069 lines · 136 authored commits · 15 open, 0 merged upstream -->
 <!-- END GENERATED -->
