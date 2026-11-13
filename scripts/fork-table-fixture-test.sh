@@ -185,6 +185,7 @@ want README.md '**all 3 features below are in an official WanGP release** (v18.1
   'the headline says all are released and names the versions'
 want README.md 'in v18.10, v19.02, so this fork is not needed for it' 'a feature shipped twice names both'
 wantnt README.md 'This feature is **being reworked**' 'a feature upstream took whole drops the rework line'
+wantnt README.md '~~' 'an accepted pull request is not struck through'
 check && ok 'the pages read back' || { bad 'the read-back'; sed 's/^/  /' "$SCRATCH/check.log"; }
 
 echo '=== 4. a pull request closed without merge ==='
@@ -194,6 +195,11 @@ want README.md '| Silent startup |' 'a closed pull request upstream answered ret
 want README.md "in upstream's own 3D update of 2026-11-03" 'a fix with no commit of its own is placed by date'
 want docs/FORK.md "as part of a larger update, in upstream's own 3D update of 2026-11-03" \
   'the ledger row carries the reason and the placement together'
+want docs/FORK.md '~~[#2286](https://github.com/deepbeepmeep/WanGP/pull/2286)~~' \
+  'a closed pull request is struck through in the ledger'
+want README.md '~~[#2565](https://github.com/deepbeepmeep/WanGP/pull/2565)~~' \
+  'the front page strikes the closed pull request it still lists'
+wantnt README.md '~~[#2526]' 'an open pull request keeps its link whole'
 wantnt docs/FORK.md '*(none — nothing of mine has been closed without merge' 'the closed table filled in'
 want README.md 'the 3 features below are **not in an official WanGP release today**' 'a closure moves no release claim'
 check && ok 'the pages read back' || { bad 'the read-back'; sed 's/^/  /' "$SCRATCH/check.log"; }

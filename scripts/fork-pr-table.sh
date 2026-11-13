@@ -194,9 +194,20 @@ def in_release(e):
 def sup(n):
     return ' (supersedes #%d)' % supersedes[n] if n in supersedes else ''
 
+def pr_link(n, text=None):
+    """A pull request the way the pages name it: a link, struck through once upstream closed it
+    without merging.
+
+    The strike says the request is dead, not the change: several of the closed ones carry a fix upstream
+    wrote itself and shipped, which is why the state beside them still reads addressed upstream. The link
+    stays clickable under the strike, because why it was closed is written on the page it links to.
+    """
+    t = '[#%d](%s)' % (n, info[n]['url']) if text is None else text
+    return '~~%s~~' % t if info[n]['state'] == 'closed' else t
+
 def row(area, text, n):
     e = info[n]
-    return '| %s | %s | [#%d](%s) | %s |' % (area, text, n, e['url'], label(n))
+    return '| %s | %s | %s | %s |' % (area, text, pr_link(n), label(n))
 
 order = list(areas)
 def rank(n):
@@ -260,8 +271,8 @@ if dead_nums:
                 when = w.get('closed') or w.get('merged') or ''
                 why = 'superseded by #%d (%s%s)' % (who, w.get('state', 'open'),
                                                     ' on ' + when if when else '')
-        L.append('| [#%d](%s) | %s — %s%s |'
-                 % (n, info[n]['url'], info[n]['title'], why,
+        L.append('| %s | %s — %s%s |'
+                 % (pr_link(n), info[n]['title'], why,
                     (', ' + addressed_where(n)) if n in addressed else ''))
 else:
     del L[-2:]            # keep the heading, drop the empty table
@@ -349,8 +360,8 @@ def feature_bullets(f):
     links = []
     for n in f['prs']:
         short = prs.get(str(n), {}).get('short', '')
-        links.append('**[PR #%d](%s)**%s' % (n, info[n]['url'],
-                                             (' (%s)' % short) if short else sup(n)))
+        links.append('**%s**%s' % (pr_link(n, '[PR #%d](%s)' % (n, info[n]['url'])),
+                                   (' (%s)' % short) if short else sup(n)))
     states = {info[n]['state'] for n in f['prs']}
     if len(states) == 1:
         st = states.pop()
@@ -487,7 +498,7 @@ for n in [x for x in sorted(open_nums, key=rank) if x not in claimed] \
     note = prs.get(str(n)) or {}
     title = note.get('short') or '**add a short title in scripts/fork-pr-notes.json** (%s)' % info[n]['title']
     what = note.get('note') or info[n]['title']
-    link = '[#%d](%s)' % (n, info[n]['url'])
+    link = pr_link(n)
     if info[n]['state'] == 'merged':
         state = link + ' **Merged** ![merged](%s) %s' % (GREEN, info[n]['merged'])
     elif n in addressed_nums:
@@ -501,6 +512,9 @@ F += ['', wrap('The table lists what is **open upstream**, what upstream has **a
                'itself, which are closed rather than left hanging as **addressed upstream, not merged** '
                '![addressed upstream](%s), named by the upstream commit and the WanGP release that carry '
                'that copy, or, when upstream wrote it inside a larger change of its own, by that change. '
+               'Where the request itself is closed its number is struck through — the request is dead even '
+               'where the fix is not — and the link stays clickable, because why upstream closed it is '
+               'written on the page it links to. '
                'Any other pull request closed without merging is not a feature of this fork, so '
                'it is not listed here; [docs/FORK.md](docs/FORK.md) keeps those with their reason, as the '
                'licence record asks, and it is regenerated from the GitHub API on every publish.'
