@@ -10419,19 +10419,13 @@ def generate_media(
                         new_audio_from_start=new_audio_added_from_audio_start,
                         source_audio_metadata=source_audio_metadata,
                         audio_codec_key=server_config.get("audio_output_codec", "aac_128"),
-                        # A branch job's generated audio can end a frame or
-                        # two short of its video (the window-boundary audio
-                        # accounting rounds down); padding it instead lets
-                        # -shortest end on the video, so no written frame is
-                        # dropped (the file ends on the video's last frame).
-                        pad_audio_to_video=(audio_window_alignment and full_generated_audio is not None) or branch_prefix is not None,
+                        # The joined track is padded to the picture and cut at the picture's own
+                        # duration, so a soundtrack that ends a frame or two early (the
+                        # window-boundary audio accounting rounds down) costs silence at the tail
+                        # instead of a file whose last frames have no sound.
                         verbose=verbose_level >= 2,
-                        # A branch job's generated audio can end a frame or
-                        # two short of its video (the window-boundary audio
-                        # accounting rounds down); padding it instead lets
-                        # -shortest end on the video, so no written frame is
-                        # dropped (the file ends on the video's last frame).
-                        pad_new_audio=branch_prefix is not None,
+                        # A kept soundtrack that runs past the last frame is kept running: the cut
+                        # moves that far past the picture instead of cutting real sound.
                         audio_tail_seconds=saved_audio_tail_seconds,
                     )
                     if not source_stays_in_file: os.remove(save_path_tmp)

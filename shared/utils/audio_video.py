@@ -604,13 +604,16 @@ def combine_and_concatenate_video_with_audio_tracks(
     new_audio_from_start=False,
     source_audio_metadata=None,
     audio_codec_key="aac_128",
-    pad_new_audio=False,
-    pad_audio_to_video=False,
     verbose = False,
     audio_tail_seconds=0.0,
 ):
     """audio_tail_seconds keeps that much audio past the last video frame (instead of cutting at the video end), so the end of the
-    video's own audio stays clear of the encoder's end effects."""
+    video's own audio stays clear of the encoder's end effects.
+
+    The audio stream is padded to that cut and never left to end on its own: a written file's soundtrack therefore always reaches its
+    last picture frame, and what follows the frame is the encoder's own whole packet (a few milliseconds of silence) rather than a
+    hole at the end. A soundtrack that stops before its picture costs the next job that reads the file: a continuation pads silence
+    up to its join, so its new scene starts from a tail the source's last frames never had."""
     extra_audio_args = get_video_audio_extra_args(audio_codec_key, save_path_tmp)
     audio_settings = get_mp4_audio_codec_settings(audio_codec_key)
     audio_codec = audio_settings["codec"]
@@ -670,21 +673,24 @@ def combine_and_concatenate_video_with_audio_tracks(
                 filters.append(
                     f'[{idx}:a]aresample={audio_sampling_rate},aformat=channel_layouts={channel_layout},'
                     f'atrim=start={start},asetpts=PTS-STARTPTS[n{i}]')
-                # A branch job's generated audio can end a frame or two short
-                # of its video (the window-boundary audio accounting rounds
-                # down); padding the track instead lets -shortest end on the
-                # video, so no written frame is dropped (the file ends on the
-                # video's last frame). Audio aligned to the video's length
-                # needs the same apad.
-                padding = ',apad=pad_dur=100' if (pad_new_audio or pad_audio_to_video) else ''
-                filters.append(f'[s{i}][n{i}]concat=n=2:v=0:a=1{padding}[aout{i}]')
+                # The joined track is padded to the cut below rather than left
+                # to end where the generated audio ends: a branch's or a window
+                # job's soundtrack can stop a frame or two short of its video
+                # (the window-boundary accounting rounds down), and the shorter
+                # of the two streams would then decide the file's audio end.
+                # Padding costs silence; the alternative costs the next
+                # continuation a source tail it has to invent.
+                filters.append(f'[s{i}][n{i}]concat=n=2:v=0:a=1,apad=pad_dur=100[aout{i}]')
                 idx += 1
             else:
                 filters.append(f'[s{i}]apad=pad_dur=100[aout{i}]')
 
         maps += ['-map', f'[aout{i}]']
 
-    # the sound ends with the picture, or with its tail: -shortest drops the last partial audio frame (AAC: up to 21 ms, a hole at each join of a merge)
+    # The sound ends with the picture, or with its tail: the cut is the picture's own duration and never -shortest, because -shortest
+    # stops at whichever whole AAC packet the encoder finished last and can leave the track a packet short of the last frame (AAC
+    # packets are 1024 samples: 21 ms at 48 kHz). A duration cut keeps the packet that straddles the end instead, so the file's audio
+    # reaches its last frame and runs at most one packet of silence past it - measured +512 samples at 48 kHz for a 12 s clip.
     duration_args = ['-t', f'{picture_duration(video_path) + audio_tail_seconds:.6f}']
     cmd = [_ffmpeg_binary(), '-y', *inputs,
            '-filter_complex', ';'.join(filters),  # ✅ Only change made
