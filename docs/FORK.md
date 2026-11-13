@@ -95,21 +95,21 @@ worker) are the ones the upstream documentation describes, made to work on Linux
 ### In this fork, submitted upstream
 | Area | What it does | PR | State |
 |---|---|---|---|
-| Latents | Save, decode and branch latents for Wan, LongCat, LTX-2, MiniMax H3, Magi Human and Ovi; pick a latent file straight from a video | [#2441](https://github.com/deepbeepmeep/WanGP/pull/2441) | open · dirty · 14 behind |
-| Output filenames | A default output filename for every model, with a template checked before the generation starts | [#2292](https://github.com/deepbeepmeep/WanGP/pull/2292) | open · clean · 39 behind |
-| Output filenames | Effective-output keywords and Python format specs for the Output Filename box | [#2290](https://github.com/deepbeepmeep/WanGP/pull/2290) | open · clean · 39 behind |
-| Linux DLSS | DLSS temporal upscaling at x3-x4, up to x6 on RTX 50, with the native Linux Frame Generation worker and installer | [#2535](https://github.com/deepbeepmeep/WanGP/pull/2535) | open · clean · 14 behind |
-| Attention installs | SpargeAttn install on Linux with CUDA 13 for RTX 30XX-50XX | [#2284](https://github.com/deepbeepmeep/WanGP/pull/2284) | open · clean · 23 behind |
-| LTX-2 | Keep LTX-2 on CUDA Graph and stop the minutes-long first steps of PyTorch compilation; the Inductor cache of a session is kept and its shapes capped. The copy in this fork carries the measured RTX 5090 timings in docs/MODELS.md; its code lines are identical | [#2551](https://github.com/deepbeepmeep/WanGP/pull/2551) | open · clean · 23 behind |
-| LTX-2 | Optional Sol-Attn sparse self-attention for native LTX-2 inference (experimental) | [#2289](https://github.com/deepbeepmeep/WanGP/pull/2289) | open · clean · 29 behind |
-| Prompt enhancer | Prompt enhancer crash with Auto Speculative Decoding on GGUF | [#2553](https://github.com/deepbeepmeep/WanGP/pull/2553) | open · dirty · 16 behind |
-| Console | Time stamps at the start of the console lines WanGP prints, on the lines the terminal draws only | [#2568](https://github.com/deepbeepmeep/WanGP/pull/2568) | open · clean · 27 behind |
-| Video | Video continuation task with an empty Source Video dividing the frame count by zero after the model loaded, instead of asking for the file | [#2639](https://github.com/deepbeepmeep/WanGP/pull/2639) | open · clean · 0 behind |
-| Video | Sliding Window sizes up to 999 frames for every video model | [#2288](https://github.com/deepbeepmeep/WanGP/pull/2288) | open · clean · 37 behind |
-| Video | x264 MJPEG (intra-frame-only) video codec option | [#2287](https://github.com/deepbeepmeep/WanGP/pull/2287) | open · clean · 176 behind |
-| Audio | “Continue Video” audio joins when the soundtrack ends early | [#2478](https://github.com/deepbeepmeep/WanGP/pull/2478) | open · clean · 0 behind |
-| Shell & UI | ffmpeg, ffprobe and the other helper programs WanGP starts are given no keyboard and a process group of their own, so a program that reads the keyboard cannot leave the shell prompt dead | [#2640](https://github.com/deepbeepmeep/WanGP/pull/2640) | open · clean · 0 behind |
-| Shell & UI | Shell prompt left dead after Ctrl+C in a WanGP run | [#2526](https://github.com/deepbeepmeep/WanGP/pull/2526) | open · clean · 0 behind |
+| Latents | Save, decode and branch latents for Wan, LongCat, LTX-2, MiniMax H3, Magi Human and Ovi; pick a latent file straight from a video. **Being reworked, and not verified against current upstream**: upstream has rewritten 14 of its 26 files since it branched, four of them no longer merge, and the splice into the MiniMax H3 transformer still merges quietly into the 58 lines upstream deleted there | [#2441](https://github.com/deepbeepmeep/WanGP/pull/2441) | open · dirty · 15 behind |
+| Output filenames | A default output filename for every model, with a template checked before the generation starts | [#2292](https://github.com/deepbeepmeep/WanGP/pull/2292) | open · clean · 40 behind |
+| Output filenames | Effective-output keywords and Python format specs for the Output Filename box | [#2290](https://github.com/deepbeepmeep/WanGP/pull/2290) | open · clean · 40 behind |
+| Linux DLSS | DLSS temporal upscaling at x3-x4, up to x6 on RTX 50, with the native Linux Frame Generation worker and installer | [#2535](https://github.com/deepbeepmeep/WanGP/pull/2535) | open · clean · 15 behind |
+| Attention installs | SpargeAttn install on Linux with CUDA 13 for RTX 30XX-50XX | [#2284](https://github.com/deepbeepmeep/WanGP/pull/2284) | open · dirty · 24 behind |
+| LTX-2 | Keep LTX-2 on CUDA Graph and stop the minutes-long first steps of PyTorch compilation; the Inductor cache of a session is kept and its shapes capped. The copy in this fork carries the measured RTX 5090 timings in docs/MODELS.md; its code lines are identical | [#2551](https://github.com/deepbeepmeep/WanGP/pull/2551) | open · clean · 24 behind |
+| LTX-2 | Optional Sol-Attn sparse self-attention for native LTX-2 inference (experimental) | [#2289](https://github.com/deepbeepmeep/WanGP/pull/2289) | open · clean · 30 behind |
+| Prompt enhancer | Prompt enhancement keeps loading when Auto cannot size the drafter: where WanGP cannot read the drafter, Auto decides on the model's own size instead of the prompt enhancer failing to start | [#2553](https://github.com/deepbeepmeep/WanGP/pull/2553) | open · clean · 0 behind |
+| Console | Time stamps at the start of the console lines WanGP prints, on the lines the terminal draws only | [#2568](https://github.com/deepbeepmeep/WanGP/pull/2568) | open · clean · 28 behind |
+| Video | Video continuation task with an empty Source Video dividing the frame count by zero after the model loaded, instead of asking for the file | [#2639](https://github.com/deepbeepmeep/WanGP/pull/2639) | open · clean · 1 behind |
+| Video | Sliding Window sizes up to 999 frames for every video model | [#2288](https://github.com/deepbeepmeep/WanGP/pull/2288) | open · clean · 38 behind |
+| Video | x264 MJPEG (intra-frame-only) video codec option | [#2287](https://github.com/deepbeepmeep/WanGP/pull/2287) | open · clean · 177 behind |
+| Audio | “Continue Video” audio joins when the soundtrack ends early | [#2478](https://github.com/deepbeepmeep/WanGP/pull/2478) | open · clean · 1 behind |
+| Shell & UI | ffmpeg, ffprobe and the other helper programs WanGP starts are given no keyboard and a process group of their own, so a program that reads the keyboard cannot leave the shell prompt dead | [#2640](https://github.com/deepbeepmeep/WanGP/pull/2640) | open · clean · 1 behind |
+| Shell & UI | Shell prompt left dead after Ctrl+C in a WanGP run | [#2526](https://github.com/deepbeepmeep/WanGP/pull/2526) | open · clean · 1 behind |
 
 ### Only in this fork, not submitted
 | Area | What it does |

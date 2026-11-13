@@ -43,7 +43,7 @@
   ],
   "front_claim_sentence": "Everything general enough is submitted upstream, which means",
   "prs": {
-    "2441": { "area": "latents",   "note": "Save, decode and branch latents for Wan, LongCat, LTX-2, MiniMax H3, Magi Human and Ovi; pick a latent file straight from a video" },
+    "2441": { "area": "latents",   "note": "Save, decode and branch latents for Wan, LongCat, LTX-2, MiniMax H3, Magi Human and Ovi; pick a latent file straight from a video. **Being reworked, and not verified against current upstream**: upstream has rewritten 14 of its 26 files since it branched, four of them no longer merge, and the splice into the MiniMax H3 transformer still merges quietly into the 58 lines upstream deleted there" },
     "2292": { "area": "filenames", "short": "the default filename", "note": "A default output filename for every model, with a template checked before the generation starts" },
     "2290": { "area": "filenames", "short": "the keywords, the format specs, the precheck", "note": "Effective-output keywords and Python format specs for the Output Filename box" },
     "2535": { "area": "dlss",      "note": "DLSS temporal upscaling at x3-x4, up to x6 on RTX 50, with the native Linux Frame Generation worker and installer" },
@@ -52,7 +52,7 @@
     "2286": { "area": "attn",      "note": "scripts/install-flashattn.sh, a Linux builder for flash-attn 2.8.3.post1 on RTX 50xx (Blackwell)" },
     "2289": { "area": "ltx2", "short": "Sol-Attn for LTX-2", "short": "Sol-Attn for LTX-2",      "note": "Optional Sol-Attn sparse self-attention for native LTX-2 inference (experimental)" },
     "2551": { "area": "ltx2", "short": "LTX-2 compilation fix", "short": "LTX-2 compilation fix",      "note": "Keep LTX-2 on CUDA Graph and stop the minutes-long first steps of PyTorch compilation; the Inductor cache of a session is kept and its shapes capped. The copy in this fork carries the measured RTX 5090 timings in docs/MODELS.md; its code lines are identical" },
-    "2553": { "area": "enhancer", "short": "Prompt enhancer on GGUF", "short": "Prompt enhancer on GGUF",  "note": "Prompt enhancer crash with Auto Speculative Decoding on GGUF" },
+    "2553": { "area": "enhancer", "short": "Prompt enhancer on GGUF",  "note": "Prompt enhancement keeps loading when Auto cannot size the drafter: where WanGP cannot read the drafter, Auto decides on the model's own size instead of the prompt enhancer failing to start" },
     "2568": { "area": "console", "short": "Console time stamps", "short": "Console time stamps",   "note": "Time stamps at the start of the console lines WanGP prints, on the lines the terminal draws only" },
     "2288": { "area": "video", "short": "Sliding window up to 999 frames", "short": "Sliding window up to 999 frames",     "note": "Sliding Window sizes up to 999 frames for every video model" },
     "2287": { "area": "video", "short": "x264 MJPEG codec", "short": "x264 MJPEG codec",     "note": "x264 MJPEG (intra-frame-only) video codec option" },
