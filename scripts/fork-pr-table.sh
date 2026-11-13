@@ -441,7 +441,7 @@ F = ['<!-- BEGIN GENERATED (front page) by scripts/fork-pr-table.sh -- do not ed
      '     writes its own landing page upstream and this repository copies none of it, so the upstream',
      '     commit the branch is merged with is named below, and it carries the only copy that can be',
      '     trusted to say what upstream said then -->',
-     '# Wan2GP — unofficial fork of WanGP', '',
+     '# Wanifold — unofficial fork of WanGP', '',
      '[![fork of WanGP](https://img.shields.io/badge/fork_of-WanGP-blue)](https://github.com/deepbeepmeep/WanGP)',
      '![synced with upstream](https://img.shields.io/badge/synced_with_upstream-%s-orange)' % tip,
      SHIELDS_OPEN, SHIELDS_MERGED, '', sec['intro'], '',

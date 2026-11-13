@@ -1,6 +1,6 @@
 ---
 name: fork-publish
-description: "Use when working in this fork of Wan2GP and its own pages are involved: publishing main to the fork remote, refreshing README.md's front page or the docs/FORK.md ledger, running git publish-main or git fork-refresh, after opening a pull request upstream, after a pull request is merged or closed, after adding a feature to the fork, and after a fresh clone. Covers which file owns which sentence, why the numbers are never typed, why the pages are committed before the push, and what must never be pushed."
+description: "Use when working in Wanifold, this fork of WanGP, and its own pages are involved: publishing main to the fork remote, refreshing README.md's front page or the docs/FORK.md ledger, running git publish-main or git fork-refresh, after opening a pull request upstream, after a pull request is merged or closed, after adding a feature to the fork, and after a fresh clone. Covers which file owns which sentence, why the numbers are never typed, why the pages are committed before the push, and what must never be pushed."
 ---
 
 # Fork Publish
@@ -65,7 +65,8 @@ true of the commit it names, and a hand-typed one drifts on the first sync.
    `note` to `scripts/fork-pr-notes.json` (and to `features` when it carries a front-page feature).
    Without a note, the row appears as a loud **TODO** in both pages at the next regeneration.
 5. **Never push to upstream.** In this clone `origin` is `deepbeepmeep/WanGP` and `fork` is
-   `abencq/Wan2GP`. `git publish-main` refuses a remote whose URL names the upstream owner; a manual
+   `abencq/Wanifold` — this fork's own name since November 2026, `abencq/Wan2GP` before, and GitHub still
+   redirects that URL. `git publish-main` refuses a remote whose URL names the upstream owner; a manual
    push is `git push fork local:main`.
 6. **The pre-push hook is a reminder, not a gate.** It never touches the network and never stops a
    push. It compares the numbers on the front page with git, the dates of the two pages with today and

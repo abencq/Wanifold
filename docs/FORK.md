@@ -1,8 +1,10 @@
-# This WanGP fork
+# Wanifold — this fork of WanGP
 
 **This is a personal, unofficial fork of [WanGP](https://github.com/deepbeepmeep/WanGP), the project of
-[DeepBeepMeep](https://github.com/deepbeepmeep).** The application, its name, its documentation, its models
-and its licence are the upstream project's, and upstream is the canonical project — see
+[DeepBeepMeep](https://github.com/deepbeepmeep)**, kept under the name **Wanifold** — the `Wan` of the model
+family this fork started from, and the `-ifold` of *manifold*: the space in which the latents of every modality
+are worked, and the many-fold of what began as a video tool. The application, its name, its documentation, its
+models and its licence are the upstream project's, and upstream is the canonical project — see
 [wangp.ai](https://wangp.ai). This repository is not affiliated with, sponsored or endorsed by the upstream
 author, and the software here is still called WanGP.
 
@@ -85,8 +87,8 @@ The installation and the usage are the upstream ones — see the
 [installation](INSTALLATION.md) and the [getting started](GETTING_STARTED.md) guides:
 
 ```bash
-git clone https://github.com/abencq/Wan2GP.git
-cd Wan2GP
+git clone https://github.com/abencq/Wanifold.git
+cd Wanifold
 python wgp.py            # Windows: run.bat
 ```
 

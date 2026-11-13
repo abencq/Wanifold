@@ -15,10 +15,13 @@ because a typed claim of that kind goes false the day upstream accepts the first
 
 <!-- intro -->
 **This is a personal fork of [WanGP](https://github.com/deepbeepmeep/WanGP) by
-[DeepBeepMeep](https://github.com/deepbeepmeep)**. It started on 2025-04-16, when the upstream project was
-still named Wan2GP, and this repository keeps that name. The app, its name, its docs, its models and its
-licence are the upstream project's, and upstream is the canonical project: see [wangp.ai](https://wangp.ai).
-This repository is **not affiliated with, sponsored or endorsed** by the upstream author.
+[DeepBeepMeep](https://github.com/deepbeepmeep)**, and I keep it under the name **Wanifold**: the `Wan` of the
+model family this fork started from, and the `-ifold` of *manifold* — the space in which the latents of every
+modality here are worked, and the many-fold of what began as a video tool. It started on 2025-04-16, when the
+upstream project was still named Wan2GP. The app, its name, its docs, its models and its licence are the
+upstream project's, and upstream is the canonical project: see [wangp.ai](https://wangp.ai). This repository is
+**not affiliated with, sponsored or endorsed** by the upstream author, and the software it carries is still
+called WanGP.
 
 **Tested under Linux.** This fork is run and tested on Linux, and on no other platform. Upstream's
 Windows and macOS paths are upstream's and I do not test them, so a problem that shows itself only there
@@ -138,7 +141,7 @@ frames.
 <!-- end -->
 
 <!-- closing -->
-**Install:** as upstream — `git clone https://github.com/abencq/Wan2GP.git && cd Wan2GP && python wgp.py`
+**Install:** `git clone https://github.com/abencq/Wanifold.git && cd Wanifold && python wgp.py`
 (Windows: `run.bat`, which I have not tested). Your models, settings and outputs are laid out as upstream
 puts them, so switching either way keeps them.
 

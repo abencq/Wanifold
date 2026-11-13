@@ -4,7 +4,7 @@
      writes its own landing page upstream and this repository copies none of it, so the upstream
      commit the branch is merged with is named below, and it carries the only copy that can be
      trusted to say what upstream said then -->
-# Wan2GP — unofficial fork of WanGP
+# Wanifold — unofficial fork of WanGP
 
 [![fork of WanGP](https://img.shields.io/badge/fork_of-WanGP-blue)](https://github.com/deepbeepmeep/WanGP)
 ![synced with upstream](https://img.shields.io/badge/synced_with_upstream-38758d3c-orange)
@@ -12,10 +12,13 @@
 ![upstream PRs merged](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fapi.github.com%2Fsearch%2Fissues%3Fq%3Drepo%3Adeepbeepmeep%2FWanGP%2Bis%3Apr%2Bauthor%3Aabencq%2Bis%3Amerged&query=%24.total_count&label=upstream%20PRs%20merged&color=blue)
 
 **This is a personal fork of [WanGP](https://github.com/deepbeepmeep/WanGP) by
-[DeepBeepMeep](https://github.com/deepbeepmeep)**. It started on 2025-04-16, when the upstream project was
-still named Wan2GP, and this repository keeps that name. The app, its name, its docs, its models and its
-licence are the upstream project's, and upstream is the canonical project: see [wangp.ai](https://wangp.ai).
-This repository is **not affiliated with, sponsored or endorsed** by the upstream author.
+[DeepBeepMeep](https://github.com/deepbeepmeep)**, and I keep it under the name **Wanifold**: the `Wan` of the
+model family this fork started from, and the `-ifold` of *manifold* — the space in which the latents of every
+modality here are worked, and the many-fold of what began as a video tool. It started on 2025-04-16, when the
+upstream project was still named Wan2GP. The app, its name, its docs, its models and its licence are the
+upstream project's, and upstream is the canonical project: see [wangp.ai](https://wangp.ai). This repository is
+**not affiliated with, sponsored or endorsed** by the upstream author, and the software it carries is still
+called WanGP.
 
 **Tested under Linux.** This fork is run and tested on Linux, and on no other platform. Upstream's
 Windows and macOS paths are upstream's and I do not test them, so a problem that shows itself only there
@@ -180,7 +183,7 @@ is not a feature of this fork, so it is not listed here; [docs/FORK.md](docs/FOR
 with their reason, as the licence record asks, and it is regenerated from the GitHub API on every
 publish.
 
-**Install:** as upstream — `git clone https://github.com/abencq/Wan2GP.git && cd Wan2GP && python wgp.py`
+**Install:** `git clone https://github.com/abencq/Wanifold.git && cd Wanifold && python wgp.py`
 (Windows: `run.bat`, which I have not tested). Your models, settings and outputs are laid out as upstream
 puts them, so switching either way keeps them.
 
