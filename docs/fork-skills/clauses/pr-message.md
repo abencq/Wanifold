@@ -14,6 +14,11 @@ request, before the session is forgotten:
   row, so nobody trials a half-finished feature believing it current. Retire it when the rework ends; it
   goes on its own once upstream takes the whole feature, a shipped feature being no longer ours to call
   unfinished.
+- `detail` is the long form of the same row: what the change replaces, the mechanism behind it, the
+  option it adds. The ledger carries it and the front page leaves it off, so a change is described once
+  on the page a reader lands on and in full where the record is kept. Reach for it instead of a second
+  paragraph on the front page: two descriptions of one pull request are two sentences written at
+  different times, and the reader cannot tell which one the fork still stands behind.
 - Run `git fork-refresh` and commit the regenerated pages on the personal branch. A pull request
   without a note appears as a loud **TODO** row in both pages.
 - A pull request that upstream closes without merging keeps its row in the ledger with its reason. It

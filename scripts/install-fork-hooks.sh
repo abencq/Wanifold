@@ -3,7 +3,20 @@
 #
 # Run it once after cloning. It sets:
 #   git config core.hooksPath scripts/git-hooks     the pre-push reminder, versioned in the tree
-#   git config alias.publish-main, alias.fork-refresh
+#   git config alias.publish-main, alias.fork-refresh, alias.sync-upstream
+#   git config merge.ours.driver true, with "README.md merge=ours" in .git/info/attributes
+#     README.md is this fork's generated front page and nothing else, while upstream rewrites its own
+#     README about fifty times a year. Keeping ours on a merge loses nothing: upstream's page is never
+#     merged here, it is read from the upstream commit this branch sits on and written to
+#     docs/UPSTREAM-README.md. One caveat, and scripts/sync-upstream.sh handles it: a merge driver is
+#     consulted only when both sides changed the file, so when upstream alone rewrote it git takes
+#     theirs, and the script puts this fork's page back into the merge. The rule is git state of this
+#     clone rather than a committed .gitattributes, so it cannot collide with upstream's own attributes
+#     -- and it is silently absent from a clone that never ran this script, which is why
+#     scripts/fork-checks/scratch-clone.sh looks for it.
+#   git config pull.rebase false
+#     a rebase swaps ours and theirs, so the rule above would then throw away this fork's page and keep
+#     upstream's edit of it. The rule is written for a merge, and git sync-upstream does a merge.
 #   a symlink from docs/fork-skills/<name> into the editor's skills directory
 #   the fork clauses appended to the commit-message, pr-message and changelog skills
 #
@@ -15,13 +28,28 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
 chmod +x scripts/git-hooks/pre-push scripts/git-hooks/pre-push.py \
-         scripts/fork-pr-table.sh scripts/publish-main.sh 2>/dev/null || true
+         scripts/fork-pr-table.sh scripts/publish-main.sh scripts/sync-upstream.sh 2>/dev/null || true
 
 git config core.hooksPath scripts/git-hooks
 git config alias.publish-main '!cd "$(git rev-parse --show-toplevel)" && scripts/publish-main.sh'
-git config alias.fork-refresh '!cd "$(git rev-parse --show-toplevel)" && scripts/fork-pr-table.sh && git --no-pager diff --stat -- README.md docs/FORK.md'
+git config alias.fork-refresh '!cd "$(git rev-parse --show-toplevel)" && scripts/fork-pr-table.sh && git --no-pager diff --stat -- README.md docs/FORK.md docs/UPSTREAM-README.md'
+git config alias.sync-upstream '!cd "$(git rev-parse --show-toplevel)" && scripts/sync-upstream.sh'
 echo 'install: hooksPath = ' "$(git config core.hooksPath)"
-echo 'install: aliases   = publish-main, fork-refresh (repository only)'
+echo 'install: aliases   = publish-main, fork-refresh, sync-upstream (repository only)'
+
+# Upstream's landing page against this fork's front page -- see the header. Both halves are git state of
+# this clone, so neither is ever pushed, and a clone that skips this script merges README.md the hard way.
+git config merge.ours.driver true
+attrs="$(git rev-parse --absolute-git-dir)/info/attributes"
+mkdir -p "$(dirname "$attrs")"
+if grep -qs '^README\.md[[:space:]]\+merge=ours$' "$attrs"; then
+  echo 'install: README.md already keeps this fork'"'"'s page on a merge'
+else
+  printf '%s\n' 'README.md merge=ours' >> "$attrs"
+  echo "install: README.md merge=ours added to $attrs"
+fi
+git config pull.rebase false
+echo 'install: merge    = README.md keeps ours, pull.rebase = false (a rebase would swap the two)'
 
 # A hook left under .git/hooks is inert once core.hooksPath points into the tree, and an inert copy
 # of an old reminder is worse than nothing: it reads like the ritual and never runs. Ask for the git

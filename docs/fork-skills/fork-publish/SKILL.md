@@ -5,37 +5,41 @@ description: "Use when working in this fork of Wan2GP and its own pages are invo
 
 # Fork Publish
 
-This fork keeps two pages that write themselves: the front page block of `README.md` and the ledger
-tables of `docs/FORK.md`. Both come from `scripts/fork-pr-table.sh`, which reads git for the size of
-the fork and the GitHub API for the state of every pull request. The ritual below keeps them true.
+This fork keeps two pages that write themselves: the front page of `README.md` and the ledger tables of
+`docs/FORK.md`. Both come from `scripts/fork-pr-table.sh`, which reads git for the size of the fork and
+the GitHub API for the state of every pull request. Upstream's own landing page is a third file,
+`docs/UPSTREAM-README.md`, copied verbatim out of the upstream commit this fork sits on. The ritual
+below keeps them true.
 
 ## The three commands
 
 | command | what it does |
 |---|---|
-| `git fork-refresh` | regenerate both pages and show the diff; commits nothing, pushes nothing |
+| `git fork-refresh` | regenerate the pages and show the diff; commits nothing, pushes nothing |
+| `git sync-upstream` | fetch `origin`, merge `origin/main`, keep this fork's front page, re-copy upstream's page from the commit merged, refresh both pages; stops on any conflict in a real file |
 | `git publish-main` | look at `fork/main`, regenerate, commit the regenerated pages, read them back, push `local` to `fork/main` |
 | `git publish-main --fast` | the same, without the read-back (one API pass less, for when the page is known good) |
-| `scripts/fork-pr-table.sh --check` | exit 1 when a page is not what the data says today |
+| `scripts/fork-pr-table.sh --check` | exit 1 when a page, or the copy of upstream's page, is not what the data says today |
 | `scripts/fork-table-fixture-test.sh` | run the generator in a scratch repository against written-down answers of the API: the accepted, shipped and closed paths, offline |
 
-`scripts/install-fork-hooks.sh` wires those two aliases, the `pre-push` reminder and the skills in
-this repository into a clone. Run it once after every fresh clone: hooks, aliases and skills live in
-the repository precisely so that they survive a clone, and none of them is active before it runs.
+`scripts/install-fork-hooks.sh` wires those aliases, the `pre-push` reminder, the merge rule that keeps
+upstream's `README.md` off this fork's front page, and the skills in this repository into a clone. Run it
+once after every fresh clone: hooks, aliases, skills and that merge rule live in or are set by the
+repository precisely so that they survive a clone, and none of them is active before it runs.
 
 ## Who owns which sentence
 
 | file | owns |
 |---|---|
 | `docs/fork-features.md` | every sentence a reader reads about the features, plus the intro and the install text |
-| `docs/fork-new.md` | the What's new entries of the front page: the section the changelog used to carry under Unreleased |
-| `scripts/fork-pr-notes.json` | the features, the short titles, the one-line descriptions of each pull request, the closed reasons |
+| `scripts/fork-pr-notes.json` | the features, the short titles, the one-line `note` of each pull request, the `detail` the ledger alone carries, the closed reasons |
 | `scripts/fork-pr-table.sh` | the numbers, the states, the tables, the wrapping, the order, the claim of the headline |
-| `README.md` between the markers | the assembled front page; written by the generator, not by hand |
+| `README.md` | the assembled front page, written whole by the generator: no line of it is hand-written, and none of it is upstream's own page |
 | `docs/FORK.md` between the markers | the ledger; same |
 | `docs/FORK.md` between the `<!-- SYNCED -->` markers | the sentence of the licence record naming the upstream commit and release this fork sits on |
+| `docs/UPSTREAM-README.md` | upstream's own landing page, verbatim: nobody writes it, the generator copies it out of the upstream commit this fork sits on |
 
-Edit the first two, never the last two. Between the markers a hand edit is lost at the next
+Edit the first two, never the rest. Between the markers a hand edit is lost at the next
 regeneration. The statement of modifications in `docs/FORK.md` is hand-written prose around one
 generated sentence: the sentence that names the commit is written by the generator, because it is only
 true of the commit it names, and a hand-typed one drifts on the first sync.
@@ -86,12 +90,15 @@ true of the commit it names, and a hand-typed one drifts on the first sync.
 
 ## Before publishing, check
 
-- `scripts/fork-pr-table.sh --check` says both pages are up to date.
-- `scripts/install-fork-hooks.sh` has run in this clone: the generator says when it has not.
+- `scripts/fork-pr-table.sh --check` says the three files the generator owns are up to date.
+- `scripts/install-fork-hooks.sh` has run in this clone: the generator says when it has not. The merge
+  rule that keeps upstream's `README.md` off the front page is git state of the clone, so a clone that
+  skipped the script merges `README.md` the hard way, and `git sync-upstream` repairs it.
 - The diff of the generated block changes only numbers, dates and states — a changed *sentence* means
-  a word file changed, `docs/fork-features.md` or `docs/fork-new.md`, and that is a change worth
-  naming in the commit message.
-- Nothing outside the markers moved: `git diff --stat` shows `README.md` and `docs/FORK.md` only.
+  a word file changed, `docs/fork-features.md` or a `note`/`detail` in `scripts/fork-pr-notes.json`,
+  and that is a change worth naming in the commit message.
+- Nothing else moved: `git diff --stat` shows `README.md`, `docs/FORK.md` and, after a sync,
+  `docs/UPSTREAM-README.md`.
 - After a change to the generator, `scripts/fork-table-fixture-test.sh` passes. It is the only place
   where an accepted pull request, a shipped release and a closure are exercised, because nothing of
   mine is merged upstream today.
