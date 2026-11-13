@@ -200,6 +200,15 @@ want docs/FORK.md '~~[#2286](https://github.com/deepbeepmeep/WanGP/pull/2286)~~'
 want README.md '~~[#2565](https://github.com/deepbeepmeep/WanGP/pull/2565)~~' \
   'the front page strikes the closed pull request it still lists'
 wantnt README.md '~~[#2526]' 'an open pull request keeps its link whole'
+# A whole feature's pull request can be closed too — it is the case that comes for the latents if upstream
+# ever refuses them — and then the strike belongs on the bullet that closes the feature section, not just
+# on a table row.
+scenario '{}' '[2290]' 'a feature whose pull request was closed'
+want README.md '~~[PR #2290](https://github.com/deepbeepmeep/WanGP/pull/2290)~~' \
+  'the bullet of a feature whose pull request is closed is struck through'
+want docs/FORK.md '~~[#2290](https://github.com/deepbeepmeep/WanGP/pull/2290)~~' \
+  'the same pull request is struck in the ledger as well'
+want README.md 'closed without merge on' 'and the feature says so in words next to it'
 wantnt docs/FORK.md '*(none — nothing of mine has been closed without merge' 'the closed table filled in'
 want README.md 'the 3 features below are **not in an official WanGP release today**' 'a closure moves no release claim'
 check && ok 'the pages read back' || { bad 'the read-back'; sed 's/^/  /' "$SCRATCH/check.log"; }
