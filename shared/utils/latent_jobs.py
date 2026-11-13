@@ -1281,6 +1281,88 @@ def _recorded_branch_head_mode(branch_prefix):
     return "pixel_rule"
 
 
+def carried_audio_end_sample(latent_audio_windows):
+    """Where the carried (kept-region) audio run ends on the written track, in
+    samples: the furthest ``start_sample + samples`` among the carried window
+    blocks. 0 when the job carries no soundtrack (a fresh job, or a source
+    latent file written without audio)."""
+    return max(
+        (int(w.get("start_sample") or 0) + int(w.get("samples") or 0)
+         for entry in (latent_audio_windows or []) for w in (entry.get("windows") or [])),
+        default=0,
+    )
+
+
+def _commit_carried_audio_to_join(latent_audio_windows, join_samples):
+    """Move the end of the carried (kept-region) audio run onto the join the mux was handed.
+
+    A job that continues a run writes its soundtrack through
+    ``combine_and_concatenate_video_with_audio_tracks``, which force-fits the kept
+    half to the length it is handed — ``apad=pad_dur=D`` then ``atrim=0:D``, with
+    ``D = source_audio_duration = continued frames / fps - the repair margin``. The
+    join is therefore a *video-derived* duration, never the length the source's
+    audio latents decode to, and the two part as soon as the source's soundtrack
+    runs short of or past its continued frames. The carried run in the accumulator
+    records that decoded length, so left alone it places every later block early
+    (or late) by the difference: measured at 2,080 samples / 43 ms on a 241-frame
+    branch cut, where the written file plays the new scene on the join while a
+    Latent Decode of the same latents played it 43 ms early.
+
+    The correction lands on the last carried window block (the kept region's own
+    committed run — the cut block for an accepted branch) and is a *committed*
+    length, the same kind of number the video side already records: the whole
+    decoded run plus its trim, not the latents' share. ``merge_audio_window_chunks``
+    pads a decode that comes back shorter than this to it, which is what keeps the
+    later blocks on their recorded positions.
+
+    Returns the samples added (negative when the mux cut the kept half shorter than
+    its latents run), 0 when there is nothing to correct. Idempotent: a second pass
+    finds the run already on the join. The block is corrected in place because the
+    accumulator is the job's own list and every later rebuild of the sidecar is
+    built from it; the caller applies it once, on the job's head window.
+    """
+    join_samples = int(join_samples or 0)
+    if join_samples <= 0 or not latent_audio_windows:
+        return 0
+    carried_end = carried_audio_end_sample(latent_audio_windows)
+    if carried_end <= 0:
+        return 0
+    windows = latent_audio_windows[-1].get("windows") or []
+    if not windows:
+        return 0
+    last = windows[-1]
+    recorded = int(last.get("samples") or 0)
+    delta = join_samples - carried_end
+    if delta == 0 or recorded + delta < 0:
+        return 0
+    last["samples"] = recorded + delta
+    return delta
+
+
+def _rebase_head_audio(latent_audio_entry, join_samples):
+    """A copy of this window's audio entry with its recorded positions laid on the
+    written track: the first window block starts where the kept region's audio ends
+    and the rest keep their offsets from it. A branch's generated window is written
+    after the kept half, so whatever position the pipeline recorded for it (its own
+    timeline, usually frame 0) is not where the file plays it. Returns the entry
+    untouched when there is no kept run to follow (``join_samples`` 0) or the
+    position already holds.
+    """
+    join_samples = int(join_samples or 0)
+    windows = latent_audio_entry.get("windows") or []
+    if join_samples <= 0 or not windows:
+        return latent_audio_entry
+    shift = join_samples - int(windows[0].get("start_sample") or 0)
+    if shift == 0:
+        return latent_audio_entry
+    moved = dict(latent_audio_entry)
+    moved["windows"] = [
+        {**w, "start_sample": max(0, int(w.get("start_sample") or 0) + shift)}
+        for w in windows
+    ]
+    return moved
+
+
 def _all_latent_sidecar(ctx, latent_entry, latent_audio_entry, window_no, latent_windows, latent_audio_windows, *,
                         branch_prefix, sliding_window, reuse_frames, post_decode_pre_trim, trim_first_frames,
                         source_video_overlap_frames_count, discard_last_frames, automatic_trim_last_frames,
@@ -1289,7 +1371,7 @@ def _all_latent_sidecar(ctx, latent_entry, latent_audio_entry, window_no, latent
                         model_type="", base_model_type="", width=0, height=0,
                         splices_exact_image=True, branch_carried_image=None,
                         branch_cut_video_block=None, branch_cut_audio_block=None,
-                        branch_entry_head_mode=None):
+                        branch_entry_head_mode=None, branch_audio_join_seconds=0.0):
     """Build the all-latent sidecar for one LTX2 / Wan / LongCat / MiniMax H3 job window.
 
     The all-latent sidecar is the sole content source of the video: one
@@ -1322,6 +1404,13 @@ def _all_latent_sidecar(ctx, latent_entry, latent_audio_entry, window_no, latent
     flagged (``length_verified: false`` with the actual written length) so the
     decode and branch flows can handle it, instead of destroying the only copy
     of the model's latent view of the video.
+
+    ``branch_audio_join_seconds`` is the audio join this job's soundtrack was
+    written at — the ``source_audio_duration`` handed to the mux, in seconds,
+    0 when the job writes no kept soundtrack. On the head window it commits the
+    carried region's audio run to that position and lays the generated window's
+    audio after it, so the file describes the track as written rather than the
+    length the carried latents happen to decode to.
     """
     is_h3 = _is_h3_family(str(base_model_type or ""), model_def)
     layout = latent_io.latent_layout_for(model_def, base_model_type)
@@ -1511,6 +1600,24 @@ def _all_latent_sidecar(ctx, latent_entry, latent_audio_entry, window_no, latent
     elif _h3_branch_mode in (None, "frozen", "anchor"):
         latent_windows.append({"latents": window_latents, **window_meta})
     if latent_audio_entry is not None:
+        # Where the written track joins: the kept region's audio ends here and this
+        # window's generated audio begins. The job knows that position as the
+        # duration it handed the mux, which force-fits the kept half to it; the
+        # sidecar counts in the audio entry's own sample rate, and both are
+        # positions on the output timeline. Only the head window can
+        # carry a kept run — a later window follows its predecessor and keeps the
+        # position the pipeline recorded for it.
+        _audio_join = 0
+        if window_no == 1 and branch_audio_join_seconds:
+            _audio_rate = int(latent_audio_entry.get("sample_rate") or 0) or next(
+                (int(_carried.get("sample_rate") or 0) for _carried in latent_audio_windows
+                 if int(_carried.get("sample_rate") or 0) > 0), 0)
+            if _audio_rate > 0:
+                _audio_join = int(round(float(branch_audio_join_seconds) * _audio_rate))
+        # Commit the kept run to the join (its latents can decode short of or past
+        # it) and read back where it ends; 0 when this job carries no soundtrack.
+        _audio_join_delta = _commit_carried_audio_to_join(latent_audio_windows, _audio_join)
+        _carried_audio_end = carried_audio_end_sample(latent_audio_windows) if window_no == 1 else 0
         if _h3_branch_mode == "anchor" and branch_cut_audio_block is not None:
             # The anchor's generated audio starts where the kept region's
             # audio ends (the decoded shared frame's samples are dropped
@@ -1520,7 +1627,7 @@ def _all_latent_sidecar(ctx, latent_entry, latent_audio_entry, window_no, latent
             _rebased = dict(latent_audio_entry)
             _rebased["windows"] = [dict(_w) for _w in (latent_audio_entry.get("windows") or [])]
             _cut_end = (int(branch_cut_audio_block.get("start_sample") or 0)
-                        + int(branch_cut_audio_block.get("samples") or 0))
+                        + int(branch_cut_audio_block.get("samples") or 0) + _audio_join_delta)
             for _w in _rebased["windows"]:
                 _head_start = int(_w.get("start_sample") or 0)
                 _w["start_sample"] = _head_start + (_cut_end - _head_start)
@@ -1545,18 +1652,19 @@ def _all_latent_sidecar(ctx, latent_entry, latent_audio_entry, window_no, latent
                 _head0["latent_len"] = _stored - _bridge_cols
                 _head0["samples"] = max(0, _window_samples - _drop)
                 # Whatever position the pipeline recorded for the window, its
-                # audio now follows the kept region's on the new track.
-                _head0["start_sample"] = max(
-                    [int(_w.get("start_sample") or 0) + int(_w.get("samples") or 0)
-                     for _carried in latent_audio_windows for _w in (_carried.get("windows") or [])]
-                    or [0])
+                # audio now follows the kept region's on the new track — the
+                # committed end of the carried run, which the head window just
+                # moved onto the join the mux was handed.
+                _head0["start_sample"] = carried_audio_end_sample(latent_audio_windows)
             latent_audio_windows.append(_head_audio)
         elif _h3_branch_mode != "rejected-end":
             # ``rejected-end``: the fresh head window's generated audio is
             # not in the written video (the containing window's own audio
             # covers the kept region, in the preseeded carried entry), so
-            # its audio entry is dropped with its video block.
-            latent_audio_windows.append(latent_audio_entry)
+            # its audio entry is dropped with its video block. Every other
+            # shape writes this window's audio right after the kept run, so
+            # that is the position it records.
+            latent_audio_windows.append(_rebase_head_audio(latent_audio_entry, _carried_audio_end))
     try:
         payload = latent_io.build_latent_sidecar(
             [window["latents"] for window in latent_windows],
@@ -3197,12 +3305,17 @@ class LatentWindowRecorder:
                   reuse_frames, post_decode_pre_trim, trim_first_frames,
                   source_video_overlap_frames_count, discard_last_frames,
                   automatic_trim_last_frames, window_prefix_is_image,
-                  sample_is_hdr, image_start_tensor, written_frame_count):
+                  sample_is_hdr, image_start_tensor, written_frame_count,
+                  branch_audio_join_seconds=0.0):
         """Rebuild and write the window's latent companion file (the block
         moved verbatim from the end of ``wgp.generate_media``'s window
         loop). ``side_files`` is mutated in place: the latent suffix is
         popped out of it (when the pipeline wrote a classic sidecar)
-        before the other side files are written by ``wgp``."""
+        before the other side files are written by ``wgp``.
+        ``branch_audio_join_seconds`` is the ``source_audio_duration`` the
+        window's mux was handed; it commits the kept region's audio run to
+        the position that mux joined at, and is only used by
+        the job's head window."""
         latent_side_bytes = None
         if latent_file_obj is not None:
             latent_entry = latent_file_obj.get(latent_io.LATENT_FORMAT_ID)
@@ -3309,7 +3422,8 @@ class LatentWindowRecorder:
                     splices_exact_image=_all_latent_splices,
                     branch_cut_video_block=self._branch_cut_video_block,
                     branch_cut_audio_block=self._branch_cut_audio_block,
-                    branch_entry_head_mode=self._branch_entry_head_mode)
+                    branch_entry_head_mode=self._branch_entry_head_mode,
+                    branch_audio_join_seconds=branch_audio_join_seconds)
         else:
             latent_side_bytes = side_files.pop(latent_io.LATENT_SIDECAR_SUFFIX, None) if isinstance(side_files, dict) else None
         if latent_side_bytes is not None:

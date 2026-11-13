@@ -715,6 +715,15 @@ def merge_audio_window_chunks(audio_chunks, window_metas=None, total_samples: in
     chunk is placed at the end of the previous chunk's committed run, so a
     multi-window decode reproduces the generated track instead of shifting
     every window after the first by the overlap amount.
+
+    A committed run is a *written* length, not a decoded one: the mux force-fits
+    every run it lays down to what the job recorded for it (``apad`` then
+    ``atrim`` in ``combine_and_concatenate_video_with_audio_tracks``), so a
+    decoded chunk that comes back shorter than its recorded ``samples`` is
+    silence-padded up to it, exactly as a chunk that comes back longer is
+    cropped down to it. Without the padding a short run would slide every later
+    chunk early by the shortfall — a branch join is the case that hits it, where
+    the kept region's latents decode shorter than the join the written file uses.
     """
     tensors: list[torch.Tensor] = []
     for chunk in audio_chunks:
@@ -745,6 +754,12 @@ def merge_audio_window_chunks(audio_chunks, window_metas=None, total_samples: in
             want = int((meta or {}).get("samples") or 0) - trim
             if 0 < want < run.shape[1]:
                 run = run[:, :want]
+            elif 0 < run.shape[1] < want:
+                # The writer committed this run at ``want`` samples (apad +
+                # atrim in the mux), so the written track really is that long
+                # here: pad the decoder's shortfall with silence instead of
+                # letting it drag every later chunk early.
+                run = torch.nn.functional.pad(run, (0, want - run.shape[1]))
             placed.append(run)
         base = 0
         if window_metas is not None and len(window_metas) == len(tensors) and window_metas[0] is not None:

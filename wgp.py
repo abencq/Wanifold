@@ -8997,6 +8997,14 @@ def generate_media(
         # The per-window latent sidecar writer (latent_jobs.LatentWindowRecorder):
         # the branch state and the model identity are fixed here, the per-window
         # values ride in with each window.
+        # Where this job's mux joins a kept soundtrack to the audio it generates —
+        # the duration handed to combine_and_concatenate_video_with_audio_tracks as
+        # source_audio_duration, which force-fits the kept half to it. The sidecar
+        # records the same position so a Latent Decode of these latents lands its
+        # new scene where the written file plays it. 0 for a generation that
+        # writes no kept soundtrack; the save block below sets it for every window
+        # that muxes audio.
+        branch_audio_join_seconds = 0.0
         latent_recorder = latent_jobs.LatentWindowRecorder(latent_ctx,
             branch_prefix=branch_prefix,
             branch_decode=branch_decode,
@@ -10407,6 +10415,7 @@ def generate_media(
                     if full_generated_audio is None and output_new_audio_filepath is not None and model_def.get("audio_tail_ms"):  # a kept soundtrack runs on past the last frame as a generated one does: a cut there (a merge, a continuation) falls inside real sound
                         saved_audio_tail_seconds = model_def["audio_tail_ms"] / 1000
                     mux_audio_sampling_rate = resolve_mux_audio_sampling_rate(output_audio_sampling_rate, source_audio_metadata, new_audio_tracks)
+                    branch_audio_join_seconds = source_audio_duration if source_audio_duration > 0 else 0.0
 
                     set_progress_status(saving_status)
                     combine_and_concatenate_video_with_audio_tracks(
@@ -10501,7 +10510,8 @@ def generate_media(
                     window_prefix_is_image=window_prefix_is_image,
                     sample_is_hdr=sample_is_hdr,
                     image_start_tensor=image_start_tensor,
-                    written_frame_count=frames_already_processed_count)
+                    written_frame_count=frames_already_processed_count,
+                    branch_audio_join_seconds=branch_audio_join_seconds)
                 output_side_files = process_side_files(media_path, side_files, return_files=api_return_side_files)
                 for side_name in output_side_files:  # a saved world file joins the Worlds gallery
                     side_path = os.path.join(os.path.dirname(media_path), side_name)
