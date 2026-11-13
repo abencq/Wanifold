@@ -131,11 +131,11 @@ worker) are the ones the upstream documentation describes, made to work on Linux
 ### Closed without merge
 | PR | Why |
 |---|---|
-| [#2600](https://github.com/deepbeepmeep/WanGP/pull/2600) | Fix the Audio Guidance setting ignored by Ovi — the fix is upstream's own: it renames audio_cfg_scalecale to audio_cfg_scale in the same three lines of models/wan/ovi_fusion_engine.py, so the Audio Guidance setting reaches Ovi, in WanGP v19.25 [`0e0a06f6`](https://github.com/deepbeepmeep/WanGP/commit/0e0a06f6) |
-| [#2565](https://github.com/deepbeepmeep/WanGP/pull/2565) | Fix the SyntaxWarning printed at startup on the About tab credits line — the fix is upstream's own: the credits line was rewritten with the escape as part of a larger update, in upstream's own 3D update of 2026-11-03 |
-| [#2482](https://github.com/deepbeepmeep/WanGP/pull/2482) | Fix the crash when saving audio that came out empty — the fix is upstream's own: it normalises an empty track in _prepare_audio_array to the frame-first shape this pull request gave it in write_wav_file, which leaves the guard added here unreachable, in WanGP v18.19 [`16bab9e2`](https://github.com/deepbeepmeep/WanGP/commit/16bab9e2) |
-| [#2295](https://github.com/deepbeepmeep/WanGP/pull/2295) | Linux: add support for DLSS Frame Generation (temporal upscaling only) — superseded by #2535 (open) |
-| [#2286](https://github.com/deepbeepmeep/WanGP/pull/2286) | Linux: build script for flash-attn 2.8.3.post1 with RTX 50xx (Blackwell) support — not picked up; the builder script stays in this fork |
+| ~~[#2600](https://github.com/deepbeepmeep/WanGP/pull/2600)~~ | Fix the Audio Guidance setting ignored by Ovi — the fix is upstream's own: it renames audio_cfg_scalecale to audio_cfg_scale in the same three lines of models/wan/ovi_fusion_engine.py, so the Audio Guidance setting reaches Ovi, in WanGP v19.25 [`0e0a06f6`](https://github.com/deepbeepmeep/WanGP/commit/0e0a06f6) |
+| ~~[#2565](https://github.com/deepbeepmeep/WanGP/pull/2565)~~ | Fix the SyntaxWarning printed at startup on the About tab credits line — the fix is upstream's own: the credits line was rewritten with the escape as part of a larger update, in upstream's own 3D update of 2026-11-03 |
+| ~~[#2482](https://github.com/deepbeepmeep/WanGP/pull/2482)~~ | Fix the crash when saving audio that came out empty — the fix is upstream's own: it normalises an empty track in _prepare_audio_array to the frame-first shape this pull request gave it in write_wav_file, which leaves the guard added here unreachable, in WanGP v18.19 [`16bab9e2`](https://github.com/deepbeepmeep/WanGP/commit/16bab9e2) |
+| ~~[#2295](https://github.com/deepbeepmeep/WanGP/pull/2295)~~ | Linux: add support for DLSS Frame Generation (temporal upscaling only) — superseded by #2535 (open) |
+| ~~[#2286](https://github.com/deepbeepmeep/WanGP/pull/2286)~~ | Linux: build script for flash-attn 2.8.3.post1 with RTX 50xx (Blackwell) support — not picked up; the builder script stays in this fork |
 <!-- END GENERATED -->
 
 ## Licence and credit

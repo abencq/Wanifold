@@ -25,7 +25,7 @@ build it offers is a Linux source build — those pull requests are Linux-specif
 oversight.
 
 The `main` branch here is an integration branch: current upstream, plus my own work — **115 files,
-+17 069 lines**, 137 authored commits, synced with upstream
++17 089 lines**, 138 authored commits, synced with upstream
 [`38758d3c`](https://github.com/deepbeepmeep/WanGP/commit/38758d3c73366422efcf609abb63cab8385f3552)
 (WanGP v19.292). Everything general enough is submitted upstream, which means the 3 features below
 are **not in an official WanGP release today**.
@@ -164,18 +164,21 @@ frames.
 | “Continue Video” joins | “Continue Video” audio joins when the soundtrack ends early | [#2478](https://github.com/deepbeepmeep/WanGP/pull/2478) open |
 | Helper programs and the terminal | ffmpeg, ffprobe and the other helper programs WanGP starts are given no keyboard and a process group of their own, so a program that reads the keyboard cannot leave the shell prompt dead | [#2640](https://github.com/deepbeepmeep/WanGP/pull/2640) open |
 | Live shell after Ctrl+C | Shell prompt left dead after Ctrl+C in a WanGP run | [#2526](https://github.com/deepbeepmeep/WanGP/pull/2526) open |
-| Ovi Audio Guidance | Audio Guidance setting ignored by Ovi generations, which ran at a fixed 4.0 | [#2600](https://github.com/deepbeepmeep/WanGP/pull/2600) **addressed upstream, not merged** ![addressed upstream](https://img.shields.io/badge/addressed%20upstream-orange) in WanGP v19.25 [`0e0a06f6`](https://github.com/deepbeepmeep/WanGP/commit/0e0a06f6) |
-| Empty-audio crash | Crash when saving audio that came out empty | [#2482](https://github.com/deepbeepmeep/WanGP/pull/2482) **addressed upstream, not merged** ![addressed upstream](https://img.shields.io/badge/addressed%20upstream-orange) in WanGP v18.19 [`16bab9e2`](https://github.com/deepbeepmeep/WanGP/commit/16bab9e2) |
-| Silent startup | SyntaxWarning printed at startup by the About tab credits line | [#2565](https://github.com/deepbeepmeep/WanGP/pull/2565) **addressed upstream, not merged** ![addressed upstream](https://img.shields.io/badge/addressed%20upstream-orange) in upstream's own 3D update of 2026-11-03 |
+| Ovi Audio Guidance | Audio Guidance setting ignored by Ovi generations, which ran at a fixed 4.0 | ~~[#2600](https://github.com/deepbeepmeep/WanGP/pull/2600)~~ **addressed upstream, not merged** ![addressed upstream](https://img.shields.io/badge/addressed%20upstream-orange) in WanGP v19.25 [`0e0a06f6`](https://github.com/deepbeepmeep/WanGP/commit/0e0a06f6) |
+| Empty-audio crash | Crash when saving audio that came out empty | ~~[#2482](https://github.com/deepbeepmeep/WanGP/pull/2482)~~ **addressed upstream, not merged** ![addressed upstream](https://img.shields.io/badge/addressed%20upstream-orange) in WanGP v18.19 [`16bab9e2`](https://github.com/deepbeepmeep/WanGP/commit/16bab9e2) |
+| Silent startup | SyntaxWarning printed at startup by the About tab credits line | ~~[#2565](https://github.com/deepbeepmeep/WanGP/pull/2565)~~ **addressed upstream, not merged** ![addressed upstream](https://img.shields.io/badge/addressed%20upstream-orange) in upstream's own 3D update of 2026-11-03 |
 
 The table lists what is **open upstream**, what upstream has **accepted** — the latter as **Merged**
 ![merged](https://img.shields.io/badge/merged-brightgreen) — and the pull requests upstream answered
 by writing the same fix itself, which are closed rather than left hanging as **addressed upstream,
 not merged** ![addressed upstream](https://img.shields.io/badge/addressed%20upstream-orange), named
 by the upstream commit and the WanGP release that carry that copy, or, when upstream wrote it inside
-a larger change of its own, by that change. Any other pull request closed without merging is not a
-feature of this fork, so it is not listed here; [docs/FORK.md](docs/FORK.md) keeps those with their
-reason, as the licence record asks, and it is regenerated from the GitHub API on every publish.
+a larger change of its own, by that change. Where the request itself is closed its number is struck
+through — the request is dead even where the fix is not — and the link stays clickable, because why
+upstream closed it is written on the page it links to. Any other pull request closed without merging
+is not a feature of this fork, so it is not listed here; [docs/FORK.md](docs/FORK.md) keeps those
+with their reason, as the licence record asks, and it is regenerated from the GitHub API on every
+publish.
 
 **Install:** as upstream — `git clone https://github.com/abencq/Wan2GP.git && cd Wan2GP && python wgp.py`
 (Windows: `run.bat`, which I have not tested). Your models, settings and outputs are laid out as upstream
@@ -185,5 +188,5 @@ puts them, so switching either way keeps them.
 > their dates in **[docs/FORK.md](docs/FORK.md)**, and keeps the upstream licence, the in-tree notices and the
 > [third-party licence texts](docs/third_party_licenses/).
 
-<!-- front page: regenerated 2026-11-13 · 115 files +17069 lines · 137 authored commits · 15 open, 0 merged upstream -->
+<!-- front page: regenerated 2026-11-13 · 115 files +17089 lines · 138 authored commits · 15 open, 0 merged upstream -->
 <!-- END GENERATED -->
