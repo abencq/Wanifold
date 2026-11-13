@@ -279,8 +279,8 @@ def fork_size():
     The commits are counted without merges, so a sync with upstream cannot inflate them, and
     without the commits that only refresh the two generated pages: publishing the page is not
     work, and a headline number that moves every time it is published is never true of anything.
-    The copy of upstream's landing page is excluded by name: the fork claims no authorship of it,
-    and a headline that grew every time upstream rewrote its own page would measure upstream.
+    The two generated pages are excluded by name: the fork claims no authorship of prose it
+    regenerates, and a headline that moved every time the pages were refreshed would measure nothing.
     """
     keep = ['--', '.'] + [':(exclude)%s' % p for p in NOT_FORK_WORK]
     names = [l for l in git('diff', '--name-only', '%s...HEAD' % REF, *keep).splitlines() if l.strip()]

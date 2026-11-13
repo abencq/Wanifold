@@ -63,7 +63,7 @@ else
   echo "publish-main: $FORK_REMOTE cannot be reached, so the remote state is unknown; the push will tell the truth" >&2
 fi
 
-echo "publish-main: regenerating README.md, docs/FORK.md and the copy of upstream's page"
+echo "publish-main: regenerating README.md and docs/FORK.md"
 scripts/fork-pr-table.sh
 
 # generated_only FILE — true when every changed line of FILE sits in a generated region: the block
