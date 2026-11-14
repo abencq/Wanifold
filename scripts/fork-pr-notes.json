@@ -62,7 +62,8 @@
     "2565": { "area": "shell", "short": "Silent startup",      "note": "SyntaxWarning printed at startup by the About tab credits line" },
     "2600": { "area": "audio", "short": "Ovi Audio Guidance", "note": "Audio Guidance setting ignored by Ovi generations, which ran at a fixed 4.0" },
     "2639": { "area": "video", "short": "Blank Source Video", "note": "Video continuation task with an empty Source Video dividing the frame count by zero after the model loaded, instead of asking for the file" },
-    "2640": { "area": "shell", "short": "Helper programs and the terminal", "note": "ffmpeg, ffprobe and the other helper programs WanGP starts are given no keyboard and a process group of their own, so a program that reads the keyboard cannot leave the shell prompt dead" }
+    "2640": { "area": "shell", "short": "Helper programs and the terminal", "note": "ffmpeg, ffprobe and the other helper programs WanGP starts are given no keyboard and a process group of their own, so a program that reads the keyboard cannot leave the shell prompt dead" },
+    "2643": { "area": "audio", "short": "Audio handover of a continued video", "note": "Continuing a video with its original soundtrack leaves a short silence where the source soundtrack ends before its picture", "detail": "Continuing a video with its original soundtrack leaves a short silence in the middle of the new video when the source soundtrack ends a little before its picture. The new audio stream now begins where the kept soundtrack really ends, and is taken from that same point, so the audio runs through and still reaches the last frame of the video. A soundtrack that runs past its picture, one whose length cannot be read, and a new audio stream that begins at its own start keep the old hand-over point." }
   },
   "closed_reason": {
     "2295": "superseded by #2535 (2026-10-24)",

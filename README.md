@@ -28,7 +28,7 @@ build it offers is a Linux source build — those pull requests are Linux-specif
 oversight.
 
 The `main` branch here is an integration branch: current upstream, plus my own work — **115 files,
-+17 102 lines**, 140 authored commits, synced with upstream
++17 245 lines**, 143 authored commits, synced with upstream
 [`38758d3c`](https://github.com/deepbeepmeep/WanGP/commit/38758d3c73366422efcf609abb63cab8385f3552)
 (WanGP v19.292). Everything general enough is submitted upstream, which means the 3 features below
 are **not in an official WanGP release today**.
@@ -164,6 +164,7 @@ frames.
 | Blank Source Video | Video continuation task with an empty Source Video dividing the frame count by zero after the model loaded, instead of asking for the file | [#2639](https://github.com/deepbeepmeep/WanGP/pull/2639) open |
 | Sliding window up to 999 frames | Sliding Window sizes up to 999 frames for every video model | [#2288](https://github.com/deepbeepmeep/WanGP/pull/2288) open |
 | x264 MJPEG codec | x264 MJPEG (intra-frame-only) video codec option | [#2287](https://github.com/deepbeepmeep/WanGP/pull/2287) open |
+| Audio handover of a continued video | Continuing a video with its original soundtrack leaves a short silence where the source soundtrack ends before its picture | [#2643](https://github.com/deepbeepmeep/WanGP/pull/2643) open |
 | “Continue Video” joins | “Continue Video” audio joins when the soundtrack ends early | [#2478](https://github.com/deepbeepmeep/WanGP/pull/2478) open |
 | Helper programs and the terminal | ffmpeg, ffprobe and the other helper programs WanGP starts are given no keyboard and a process group of their own, so a program that reads the keyboard cannot leave the shell prompt dead | [#2640](https://github.com/deepbeepmeep/WanGP/pull/2640) open |
 | Live shell after Ctrl+C | Shell prompt left dead after Ctrl+C in a WanGP run | [#2526](https://github.com/deepbeepmeep/WanGP/pull/2526) open |
@@ -191,5 +192,5 @@ puts them, so switching either way keeps them.
 > their dates in **[docs/FORK.md](docs/FORK.md)**, and keeps the upstream licence, the in-tree notices and the
 > [third-party licence texts](docs/third_party_licenses/).
 
-<!-- front page: regenerated 2026-11-13 · 115 files +17102 lines · 140 authored commits · 15 open, 0 merged upstream -->
+<!-- front page: regenerated 2026-11-14 · 115 files +17245 lines · 143 authored commits · 16 open, 0 merged upstream -->
 <!-- END GENERATED -->
