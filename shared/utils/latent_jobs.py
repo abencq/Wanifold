@@ -975,13 +975,19 @@ def _prepare_branch_prefix(entry, branch_point, carried, *, base_model_type, vid
     tail_trim_k = int(spec.get("tail_trim") or 0)
     if head["cut_at_window_end"]:
         # The whole containing window is kept and the new portion is a fresh
-        # standard window. That is clean only when the window commits its
-        # full decoded run minus at most a one-frame head share (a larger
-        # head share or any tail trim would land uncommitted frames inside
-        # the new segment, or drop committed ones from the decode).
-        # (For H3 the plan's ``clean_window_end`` is the same test over the
-        # same recorded trims.)
-        if is_h3 and not head["clean_window_end"] or not is_h3 and (tail_trim_k > 0 or head_trim_k > 1):
+        # standard window. Under the full freeze that is clean only when the
+        # window commits its full decoded run minus at most a one-frame head
+        # share: the head window re-denoises the whole kept run, so a larger
+        # head share would land uncommitted frames inside the new segment. The
+        # pixel rule decouples the frozen head (the kept run's tail N) from the
+        # window's own decoded head, so a head trim of any size is clean there;
+        # the kept region the assembly splices is the window's committed run,
+        # which already excludes its head share. Either way a tail trim drops
+        # committed frames from the kept decode, so it always rejects.
+        # (For H3 the plan's ``clean_window_end`` is the same full-freeze test
+        # over the same recorded trims; H3 never takes the pixel rule.)
+        if is_h3 and not head["clean_window_end"] or not is_h3 and (
+                tail_trim_k > 0 or (not pixel_rule and head_trim_k > 1)):
             return None, f"the branch point ends a window trimmed by {head_trim_k} head / {tail_trim_k} tail frame(s); the prefix substitution only supports clean window ends"
         decoded_window = int(head["decoded_window"])
         if is_h3:
