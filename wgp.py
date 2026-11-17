@@ -8804,6 +8804,7 @@ def generate_media(
         frame_scheduler=frame_scheduler,
         scheduled_windows_template=scheduled_windows_template,
         default_windows_template=default_windows_template,
+        image_start=image_start,
         window_plan=latent_jobs.WindowPlan(
             sliding_window_size=sliding_window_size,
             default_reuse_frames=default_reuse_frames,

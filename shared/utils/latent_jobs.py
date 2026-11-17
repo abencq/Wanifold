@@ -540,6 +540,52 @@ def resolve_latent_branch(ctx, image_prompt_type, video_source, state, model_typ
     return info, ""
 
 
+def _branch_conditioning_conflict(ctx, model_type, inputs):
+    """The conditioning gate for a *From latent* branch job.
+
+    A branch keeps the source run's frames as its head. Conditioning that
+    rewrites those frames (a Start Image, reference images, a Control Video
+    or its mask) would condition the same pixels twice: the model-side
+    branch guide accepts only the plain kept-latent prefix, so a start image
+    at frame 0 collides with the kept run's frame 0, and a control video's
+    own window grid does not match the branch head. These combinations are
+    refused with an explicit reason instead of being silently dropped by the
+    model. ``msr`` / ``editanything`` / ``joyai`` rebuild a per-window guide
+    and are refused until their branch path is implemented.
+
+    Returns a user-facing refusal string, or "" when the conditioning does
+    not conflict (a branch of an i2v source carries its start image as
+    sidecar content, not as a new conditioning).
+    """
+    if not inputs.get("branch_from_latent"):
+        return ""
+    if int(inputs.get("image_mode", 0) or 0) > 0:
+        return ""
+    if len(filter_letters(str(inputs.get("image_prompt_type") or ""), "VL")) == 0:
+        return ""
+    conflicts = []
+    if inputs.get("image_start") is not None:
+        conflicts.append("a Start Image cannot be used on a branch: frame 0 is the kept run's own start image or decoded frame, and the source file's image is carried automatically")
+    if inputs.get("image_refs"):
+        conflicts.append("reference images condition the branch head window and are not carried through a branch")
+    if inputs.get("video_guide") or inputs.get("video_guide2") or inputs.get("video_guide3"):
+        conflicts.append("a Control Video re-conditions frames the branch already freezes, and its own window grid does not match the branch head")
+    if inputs.get("video_mask") or inputs.get("image_mask") or inputs.get("image_guide"):
+        conflicts.append("a control mask or guide re-conditions frames the branch already freezes")
+    model_def = ctx.get_model_def(model_type) or {}
+    base_model_type = str(ctx.get_base_model_type(model_type) or "")
+    if (base_model_type in ("ltx2_22B_edit_anything", "ltx2_22B_msr", "joyai_echo")
+            or bool(model_def.get("ltx2_edit_anything"))
+            or bool(model_def.get("ltx2_msr"))
+            or bool(model_def.get("joyai_echo"))):
+        conflicts.append("this model's reference/control conditioning rebuilds a per-window guide that the branch head does not carry")
+    if not conflicts:
+        return ""
+    return ("From latent: " + "; ".join(conflicts)
+            + ". Run the job without the latent file, or remove that conditioning.")
+
+
+
 def validate_latent_branch_task(ctx, state, model_type, inputs):
     """Queue-time validation for a *From latent* branch job.
 
@@ -566,7 +612,9 @@ def validate_latent_branch_task(ctx, state, model_type, inputs):
             and len(str(inputs.get("video_source") or "").strip()) == 0 \
             and len(str(inputs.get("branch_latent_file") or "").strip()) == 0:
         return "From latent: select a source video or a latent file"
-    return f"From latent: {error}" if error else ""
+    if error:
+        return f"From latent: {error}"
+    return _branch_conditioning_conflict(ctx, model_type, inputs)
 
 
 # ---------------------------------------------------------------------------
@@ -2980,7 +3028,7 @@ def plan_branch_head_window(ctx, *, branch_latent_info, branch_prefix, branch_de
                             video_continuation_frames,
                             sliding_window_discard_last_frames, sliding_window,
                             frame_scheduler, scheduled_windows_template,
-                            default_windows_template, window_plan) -> dict:
+                            default_windows_template, window_plan, image_start=None) -> dict:
     """The branch job's determinism + head-window plan, moved out of
     ``wgp.generate_media``.
 
@@ -3003,6 +3051,10 @@ def plan_branch_head_window(ctx, *, branch_latent_info, branch_prefix, branch_de
     import ``wgp``).
     """
     refusal = None
+    if image_start is not None and (branch_prefix is not None or branch_decode is not None):
+        refusal = ("From latent: a Start Image cannot be used on a branch: frame 0 is "
+                   "the kept run's own start image or decoded frame. Run the job without "
+                   "the Start Image, or without the latent file.")
     if branch_prefix is not None and branch_latent_info is not None:
         _prefill_seed = int(branch_latent_info.get("prefill_seed") or 0)
         if seed is None and _prefill_seed > 0:
