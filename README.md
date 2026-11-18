@@ -7,7 +7,7 @@
 # Wanifold — unofficial fork of WanGP
 
 [![fork of WanGP](https://img.shields.io/badge/fork_of-WanGP-blue)](https://github.com/deepbeepmeep/WanGP)
-![synced with upstream](https://img.shields.io/badge/synced_with_upstream-38758d3c-orange)
+![synced with upstream](https://img.shields.io/badge/synced_with_upstream-f4cfc125-orange)
 ![upstream PRs open](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fapi.github.com%2Fsearch%2Fissues%3Fq%3Drepo%3Adeepbeepmeep%2FWanGP%2Bis%3Apr%2Bauthor%3Aabencq%2Bis%3Aopen&query=%24.total_count&label=upstream%20PRs%20open&color=blue)
 ![upstream PRs merged](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fapi.github.com%2Fsearch%2Fissues%3Fq%3Drepo%3Adeepbeepmeep%2FWanGP%2Bis%3Apr%2Bauthor%3Aabencq%2Bis%3Amerged&query=%24.total_count&label=upstream%20PRs%20merged&color=blue)
 
@@ -27,16 +27,16 @@ here builds natively for Linux instead of running the Windows binaries under Win
 build it offers is a Linux source build — those pull requests are Linux-specific by what they are, not by
 oversight.
 
-The `main` branch here is an integration branch: current upstream, plus my own work — **115 files,
-+17 245 lines**, 143 authored commits, synced with upstream
-[`38758d3c`](https://github.com/deepbeepmeep/WanGP/commit/38758d3c73366422efcf609abb63cab8385f3552)
-(WanGP v19.292). Everything general enough is submitted upstream, which means the 3 features below
+The `main` branch here is an integration branch: current upstream, plus my own work — **116 files,
++17 480 lines**, 148 authored commits, synced with upstream
+[`f4cfc125`](https://github.com/deepbeepmeep/WanGP/commit/f4cfc1259215577be9a2ee280c41efbedfb4459a)
+(WanGP v20.00). Everything general enough is submitted upstream, which means the 3 features below
 are **not in an official WanGP release today**.
 
 ## Latent saving, decoding and branching
 
 > **Status.** This feature is **being reworked**: refactored, improved and fixed. It is **not
-> verified against current upstream** (`38758d3c`), so treat it as this fork's development branch
+> verified against current upstream** (`f4cfc125`), so treat it as this fork's development branch
 > rather than a released feature; where it stands upstream is given at the end of this section.
 
 **What it is.** Keep the latents a generation produced, saved as a companion latent file along the
@@ -161,12 +161,10 @@ frames.
 | Sol-Attn for LTX-2 | Optional Sol-Attn sparse self-attention for native LTX-2 inference (experimental) | [#2289](https://github.com/deepbeepmeep/WanGP/pull/2289) open |
 | Prompt enhancer on GGUF | Prompt enhancement keeps loading when Auto cannot size the drafter: where WanGP cannot read the drafter, Auto decides on the model's own size instead of the prompt enhancer failing to start | [#2553](https://github.com/deepbeepmeep/WanGP/pull/2553) open |
 | Console time stamps | Time stamps at the start of the console lines WanGP prints, on the lines the terminal draws only | [#2568](https://github.com/deepbeepmeep/WanGP/pull/2568) open |
-| Blank Source Video | Video continuation task with an empty Source Video dividing the frame count by zero after the model loaded, instead of asking for the file | [#2639](https://github.com/deepbeepmeep/WanGP/pull/2639) open |
 | Sliding window up to 999 frames | Sliding Window sizes up to 999 frames for every video model | [#2288](https://github.com/deepbeepmeep/WanGP/pull/2288) open |
 | x264 MJPEG codec | x264 MJPEG (intra-frame-only) video codec option | [#2287](https://github.com/deepbeepmeep/WanGP/pull/2287) open |
 | Audio handover of a continued video | Continuing a video with its original soundtrack leaves a short silence where the source soundtrack ends before its picture | [#2643](https://github.com/deepbeepmeep/WanGP/pull/2643) open |
 | “Continue Video” joins | “Continue Video” audio joins when the soundtrack ends early | [#2478](https://github.com/deepbeepmeep/WanGP/pull/2478) open |
-| Helper programs and the terminal | ffmpeg, ffprobe and the other helper programs WanGP starts are given no keyboard and a process group of their own, so a program that reads the keyboard cannot leave the shell prompt dead | [#2640](https://github.com/deepbeepmeep/WanGP/pull/2640) open |
 | Live shell after Ctrl+C | Shell prompt left dead after Ctrl+C in a WanGP run | [#2526](https://github.com/deepbeepmeep/WanGP/pull/2526) open |
 | Ovi Audio Guidance | Audio Guidance setting ignored by Ovi generations, which ran at a fixed 4.0 | ~~[#2600](https://github.com/deepbeepmeep/WanGP/pull/2600)~~ **addressed upstream, not merged** ![addressed upstream](https://img.shields.io/badge/addressed%20upstream-orange) in WanGP v19.25 [`0e0a06f6`](https://github.com/deepbeepmeep/WanGP/commit/0e0a06f6) |
 | Empty-audio crash | Crash when saving audio that came out empty | ~~[#2482](https://github.com/deepbeepmeep/WanGP/pull/2482)~~ **addressed upstream, not merged** ![addressed upstream](https://img.shields.io/badge/addressed%20upstream-orange) in WanGP v18.19 [`16bab9e2`](https://github.com/deepbeepmeep/WanGP/commit/16bab9e2) |
@@ -192,5 +190,5 @@ puts them, so switching either way keeps them.
 > their dates in **[docs/FORK.md](docs/FORK.md)**, and keeps the upstream licence, the in-tree notices and the
 > [third-party licence texts](docs/third_party_licenses/).
 
-<!-- front page: regenerated 2026-11-14 · 115 files +17245 lines · 143 authored commits · 16 open, 0 merged upstream -->
+<!-- front page: regenerated 2026-11-18 · 116 files +17480 lines · 148 authored commits · 14 open, 0 merged upstream -->
 <!-- END GENERATED -->
