@@ -161,6 +161,7 @@ frames.
 | Sol-Attn for LTX-2 | Optional Sol-Attn sparse self-attention for native LTX-2 inference (experimental) | [#2289](https://github.com/deepbeepmeep/WanGP/pull/2289) open |
 | Prompt enhancer on GGUF | Prompt enhancement keeps loading when Auto cannot size the drafter: where WanGP cannot read the drafter, Auto decides on the model's own size instead of the prompt enhancer failing to start | [#2553](https://github.com/deepbeepmeep/WanGP/pull/2553) open |
 | Console time stamps | Time stamps at the start of the console lines WanGP prints, on the lines the terminal draws only | [#2568](https://github.com/deepbeepmeep/WanGP/pull/2568) open |
+| LongCat sparse attention indentation | LongCat sparse attention no longer stops a compile check with an IndentationError, and the attention calculations are unchanged | [#2664](https://github.com/deepbeepmeep/WanGP/pull/2664) open |
 | Sliding window up to 999 frames | Sliding Window sizes up to 999 frames for every video model | [#2288](https://github.com/deepbeepmeep/WanGP/pull/2288) open |
 | x264 MJPEG codec | x264 MJPEG (intra-frame-only) video codec option | [#2287](https://github.com/deepbeepmeep/WanGP/pull/2287) open |
 | Audio handover of a continued video | Continuing a video with its original soundtrack leaves a short silence where the source soundtrack ends before its picture | [#2643](https://github.com/deepbeepmeep/WanGP/pull/2643) open |
@@ -190,5 +191,5 @@ puts them, so switching either way keeps them.
 > their dates in **[docs/FORK.md](docs/FORK.md)**, and keeps the upstream licence, the in-tree notices and the
 > [third-party licence texts](docs/third_party_licenses/).
 
-<!-- front page: regenerated 2026-11-18 · 116 files +17480 lines · 148 authored commits · 14 open, 0 merged upstream -->
+<!-- front page: regenerated 2026-11-18 · 116 files +17480 lines · 148 authored commits · 15 open, 0 merged upstream -->
 <!-- END GENERATED -->
