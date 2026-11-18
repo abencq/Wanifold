@@ -1671,6 +1671,7 @@ class LTX2:
         prefix_kept_frames=0,
         prefix_is_i2v=False,
         prefix_i2v_image_frames=None,
+        branch_conditioning_start_frame: int | None = None,
         audio_scale: float | None = None,
         outpainting_dims: list[int] | None = None,
         frame_num: int = 121,
@@ -1753,6 +1754,15 @@ class LTX2:
             audio_prompt_type = ""
             input_waveform = None
         audio_from_control_video = "2" in audio_prompt_type
+        branch_start_frame = (int(branch_conditioning_start_frame)
+                              if branch_conditioning_start_frame is not None else None)
+        if branch_start_frame is not None:
+            if branch_start_frame < 0:
+                raise ValueError("branch conditioning start frame must not be negative")
+            if branch_start_frame >= int(frame_num):
+                raise ValueError(
+                    f"branch conditioning starts at frame {branch_start_frame} of a {int(frame_num)}-frame window; "
+                    "there is no new segment to condition")
         image_start = _coerce_image_list(image_start)
         image_end = _coerce_image_list(image_end)
         if frames_to_inject is None:
@@ -1836,8 +1846,30 @@ class LTX2:
         masking_source = None
         if input_frames is not None or input_frames2 is not None:
             if audio_from_control_video:
+                if branch_start_frame is not None:
+                    # A branch output keeps the pre-cut section from the sidecar;
+                    # a frozen control-video rebuild would reapply it. Until that
+                    # rebuild accepts a branch head, the branch refuses this mode.
+                    raise ValueError(
+                        "audio-from-control-video rebuilds a frozen control video and is not supported on a latent branch")
                 frozen_control_video = _build_frozen_control_video(input_frames, input_video, frame_num, prefix_frames_count, latent_stride)
                 frame_num = int(frozen_control_video.shape[1])
+            elif branch_start_frame is not None:
+                # The branch guide occupies the window's first frames; the Control
+                # Video (and its mask) conditions only the new segment that follows.
+                control_start_frame = branch_start_frame
+                available = int(frame_num) - int(branch_start_frame)
+                if input_frames is not None:
+                    input_frames = input_frames[:, :available]
+                if input_frames2 is not None:
+                    input_frames2 = input_frames2[:, :available]
+                if input_masks is not None:
+                    input_masks = input_masks[:, :available]
+                if input_masks2 is not None:
+                    input_masks2 = input_masks2[:, :available]
+                merge_conditioning_and_guide = False
+                continuous_conditioning_and_guide = False
+                skip_first_guide_latent = False
             else:
                 # continuous_conditioning_and_guide = has_prefix_frames and (ic_lora_downscale_factor or 1) == 1 and not is_start_image_only
                 # merge_conditioning_and_guide = has_prefix_frames and any_outpainting
@@ -1895,6 +1927,7 @@ class LTX2:
                         }
 
         force_stage2_ref_video_conditioning = False
+        reference_start_frame = int(branch_start_frame) if branch_start_frame is not None else 0
         if msr and "I" in video_prompt_type and input_ref_images is not None:
             if ltx25:
                 from .msr import MSRReferenceImages, load_slot_embeddings
@@ -1919,20 +1952,23 @@ class LTX2:
                 video_conditioning.append((ref_video, 0, control_strength))
             force_stage2_ref_video_conditioning = True
         elif main_ingredients and "I" in video_prompt_type and input_ref_images is not None:
-            ref_frame_count = int(frame_num)
+            ref_frame_count = (max(1, int(frame_num) - reference_start_frame)
+                               if branch_start_frame is not None else int(frame_num))
             ref_video = _duplicate_ref_image_as_video(input_ref_images, ref_frame_count)
             if ref_video is not None:
                 if video_conditioning is None:
                     video_conditioning = []
-                video_conditioning.append((ref_video, 0, control_strength))
+                video_conditioning.append((ref_video, reference_start_frame, control_strength))
                 force_stage2_ref_video_conditioning = True
         elif not (editanything or layout_to_render) and "I" in video_prompt_type and "F" not in video_prompt_type and "K" not in video_prompt_type and input_ref_images is not None:
             ref_frame_count = self.model_def.get("ltx2_ic_lora_ref_video_frames", 1)
+            if branch_start_frame is not None:
+                ref_frame_count = min(int(ref_frame_count), max(1, int(frame_num) - reference_start_frame))
             ref_video = _duplicate_ref_image_as_video(input_ref_images, ref_frame_count)
             if ref_video is not None:
                 if video_conditioning is None:
                     video_conditioning = []
-                video_conditioning.append((ref_video, 0, control_strength))
+                video_conditioning.append((ref_video, reference_start_frame, control_strength))
 
         latent_conditioning_stage2 = None
 
@@ -1972,11 +2008,14 @@ class LTX2:
 
         if (window_no == 1 and image_start is None
                 and int(prefix_frames_count or 0) > 0
-                and input_frames is None and input_frames2 is None
-                and input_ref_images is None and video_conditioning is None
-                and frozen_control_video is None and not msr and not editanything
-                and joyai_context is None and prefix_latents is not None
-                and not hdr_enabled):
+                and prefix_latents is not None
+                and not msr and not editanything
+                and joyai_context is None
+                and not hdr_enabled
+                and (branch_start_frame is not None
+                     or (input_frames is None and input_frames2 is None
+                         and input_ref_images is None and video_conditioning is None
+                         and frozen_control_video is None))):
             _pv = prefix_latents
             if _pv.dim() == 5 and _pv.shape[0] == 1:
                 _pv = _pv[0]

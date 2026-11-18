@@ -540,22 +540,40 @@ def resolve_latent_branch(ctx, image_prompt_type, video_source, state, model_typ
     return info, ""
 
 
-def _branch_conditioning_conflict(ctx, model_type, inputs):
+def branch_conditioning_requested(inputs):
+    """Whether a branch job carries a conditioning input on its new segment.
+
+    Start images and control masks alone are not counted here: the gate
+    refuses a Start Image outright, and a mask needs the Control Video it
+    masks. Reference images, Control Video files and the paired mask are the
+    conditioning carried by the LTX2 branch implementation.
+    """
+    return bool(
+        inputs.get("image_refs")
+        or inputs.get("video_guide")
+        or inputs.get("video_guide2")
+        or inputs.get("video_guide3")
+        or inputs.get("video_mask")
+    )
+
+
+def _branch_conditioning_conflict(ctx, model_type, inputs, branch_info=None):
     """The conditioning gate for a *From latent* branch job.
 
-    A branch keeps the source run's frames as its head. Conditioning that
-    rewrites those frames (a Start Image, reference images, a Control Video
-    or its mask) would condition the same pixels twice: the model-side
-    branch guide accepts only the plain kept-latent prefix, so a start image
-    at frame 0 collides with the kept run's frame 0, and a control video's
-    own window grid does not match the branch head. These combinations are
-    refused with an explicit reason instead of being silently dropped by the
-    model. ``msr`` / ``editanything`` / ``joyai`` rebuild a per-window guide
-    and are refused until their branch path is implemented.
+    A branch keeps the source run's frames as its head, so a Start Image
+    cannot be a new condition: frame 0 is the kept run's own start image or
+    decoded frame. LTX2 can carry reference images and Control Video into the
+    *new* segment only: the model-side branch guide stays the kept pixels, the
+    control/reference entries start at the first new frame (the branch head's
+    ``guide_frames``), and the head is the full freeze rather than the pixel
+    rule's re-denoised bridge. The families that rebuild a per-window guide
+    (MSR, EditAnything, JoyAI) remain refused until their branch path is
+    implemented; non-LTX2 families are refused because their frozen-head
+    conditioning path is not wired.
 
-    Returns a user-facing refusal string, or "" when the conditioning does
-    not conflict (a branch of an i2v source carries its start image as
-    sidecar content, not as a new conditioning).
+    Returns a user-facing refusal string, or "" when the conditioning is
+    supported (a branch of an i2v source carries its start image as sidecar
+    content, not as a new conditioning).
     """
     if not inputs.get("branch_from_latent"):
         return ""
@@ -564,21 +582,63 @@ def _branch_conditioning_conflict(ctx, model_type, inputs):
     if len(filter_letters(str(inputs.get("image_prompt_type") or ""), "VL")) == 0:
         return ""
     conflicts = []
-    if inputs.get("image_start") is not None:
+    image_start = inputs.get("image_start")
+    if image_start is not None and image_start not in ([], [None]):
         conflicts.append("a Start Image cannot be used on a branch: frame 0 is the kept run's own start image or decoded frame, and the source file's image is carried automatically")
-    if inputs.get("image_refs"):
-        conflicts.append("reference images condition the branch head window and are not carried through a branch")
-    if inputs.get("video_guide") or inputs.get("video_guide2") or inputs.get("video_guide3"):
-        conflicts.append("a Control Video re-conditions frames the branch already freezes, and its own window grid does not match the branch head")
-    if inputs.get("video_mask") or inputs.get("image_mask") or inputs.get("image_guide"):
-        conflicts.append("a control mask or guide re-conditions frames the branch already freezes")
     model_def = ctx.get_model_def(model_type) or {}
     base_model_type = str(ctx.get_base_model_type(model_type) or "")
-    if (base_model_type in ("ltx2_22B_edit_anything", "ltx2_22B_msr", "joyai_echo")
-            or bool(model_def.get("ltx2_edit_anything"))
-            or bool(model_def.get("ltx2_msr"))
-            or bool(model_def.get("joyai_echo"))):
+    heavy_branch = (
+        base_model_type in ("ltx2_22B_edit_anything", "ltx2_22B_msr", "joyai_echo")
+        or bool(model_def.get("ltx2_edit_anything"))
+        or bool(model_def.get("ltx2_msr"))
+        or bool(model_def.get("joyai_echo"))
+    )
+    if heavy_branch:
         conflicts.append("this model's reference/control conditioning rebuilds a per-window guide that the branch head does not carry")
+    if conflicts:
+        return ("From latent: " + "; ".join(conflicts)
+                + ". Run the job without the latent file, or remove that conditioning.")
+
+    if not branch_conditioning_requested(inputs):
+        return ""
+    if not _is_ltx2_family(base_model_type, model_def) or base_model_type not in _BRANCH_PREFIX_LAYOUTS:
+        return ("From latent: reference images and a Control Video are carried only by an LTX2 branch that "
+                "supports the frozen kept-latent prefix; this model's branch path does not condition the new segment. "
+                "Run the job without the latent file, or remove that conditioning.")
+
+    video_prompt_type = str(inputs.get("video_prompt_type") or "")
+    audio_prompt_type = str(inputs.get("audio_prompt_type") or "")
+    controls = bool(inputs.get("video_guide") or inputs.get("video_guide2") or inputs.get("video_guide3"))
+    refs = bool(inputs.get("image_refs"))
+    masks = bool(inputs.get("video_mask") or inputs.get("image_mask") or inputs.get("image_guide"))
+    if masks and not controls:
+        conflicts.append("a Video Mask needs the Control Video it masks on a branch")
+    if controls and refs:
+        conflicts.append("a Control Video and reference images cannot both condition the branch's new segment; use one conditioning path")
+    if "T" in video_prompt_type and (controls or refs):
+        conflicts.append("the 'Aligned to the beginning of the Source Video' mode cannot be used on a branch: the branch starts at the cut, so conditioning must be aligned to the first new frame")
+    if controls and inputs.get("video_guide_outpainting") not in (None, "", "#"):
+        conflicts.append("spatial outpainting on a branch would merge the Control Video with the kept guide; it is not carried by the branch")
+    if controls and "2" in audio_prompt_type:
+        conflicts.append("audio-from-control-video rebuilds a frozen control video and is not carried by a branch yet")
+    if refs:
+        positions = str(inputs.get("frames_positions") or "").strip()
+        if positions and branch_info:
+            # Numeric positions are branch-shifted (1 = the first new frame), so the
+            # resolver places them after the kept prefix. A malformed value is left
+            # to the generation-time resolver, which already refuses it.
+            kept = int((branch_info.get("branch") or {}).get("kept_frames") or 0)
+            if kept > 0:
+                for token in positions.replace(",", " ").split():
+                    if token.upper() in ("L", "X"):
+                        continue
+                    try:
+                        value = int(token)
+                    except ValueError:
+                        continue
+                    if value < 1:
+                        conflicts.append("injected reference frame positions must start at 1 on a branch (the branch shift places 1 at the first new frame)")
+                        break
     if not conflicts:
         return ""
     return ("From latent: " + "; ".join(conflicts)
@@ -614,7 +674,7 @@ def validate_latent_branch_task(ctx, state, model_type, inputs):
         return "From latent: select a source video or a latent file"
     if error:
         return f"From latent: {error}"
-    return _branch_conditioning_conflict(ctx, model_type, inputs)
+    return _branch_conditioning_conflict(ctx, model_type, inputs, branch_info=_info)
 
 
 # ---------------------------------------------------------------------------
@@ -903,7 +963,7 @@ def _magi_video_vae_identity(model_def, base_model_type):
     return vae_file, vae_sha
 
 
-def _prepare_branch_prefix(entry, branch_point, carried, *, base_model_type, video_length, height=None, width=None, fit_canvas=None, audio_entry=None, vae_file="", vae_sha256="", model_def=None, head_mode="full_freeze", reuse_frames=None):
+def _prepare_branch_prefix(entry, branch_point, carried, *, base_model_type, video_length, height=None, width=None, fit_canvas=None, audio_entry=None, vae_file="", vae_sha256="", model_def=None, head_mode="full_freeze", reuse_frames=None, conditioning=False):
     """Fit check + head-window plan for a sidecar-sourced branch prefix.
 
     Returns ``(prefix, error)``. ``prefix`` is None unless the job's model can take the
@@ -929,6 +989,11 @@ def _prepare_branch_prefix(entry, branch_point, carried, *, base_model_type, vid
     shape this job got. A cut at the window's committed end also returns
     ``head_frame_num`` / ``head_output`` / ``head_trim_new`` whenever the plan derives
     them, and the request is then the segment on top of the kept run.
+
+    ``conditioning`` forces the full freeze: a Control Video, a mask or reference images
+    condition only the new segment, so the re-denoised pixel-rule bridge is not combined
+    with them. The returned prefix then carries ``conditioning_start_frame`` — the first
+    model-window frame after the branch's guide — for the model to start those inputs at.
     """
     layout = _BRANCH_PREFIX_LAYOUTS.get(str(base_model_type or ""))
     if layout is None:
@@ -942,8 +1007,9 @@ def _prepare_branch_prefix(entry, branch_point, carried, *, base_model_type, vid
     is_ltx2 = str(base_model_type or "").startswith("ltx2")
     # The rule applies where the family says how its head takes pixels; families
     # that say nothing keep their existing plan (the full freeze).
-    pixel_rule = str(head_mode) == "pixel_rule" and branch_pixel_rule_capability(
-        base_model_type, model_def) is not None
+    pixel_rule = (str(head_mode) == "pixel_rule"
+                  and not conditioning
+                  and branch_pixel_rule_capability(base_model_type, model_def) is not None)
     specs = latent_io.entry_window_specs(entry)
     try:
         k = latent_io.branch_window_position(entry, branch_point, specs)
@@ -1117,6 +1183,13 @@ def _prepare_branch_prefix(entry, branch_point, carried, *, base_model_type, vid
         prefix_audio = latent_io.magi_branch_audio_prefix_latents(audio_entry, entry, branch_point)
     elif _is_ovi_family(base_model_type, model_def) and audio_entry is not None:
         prefix_audio = latent_io.ovi_branch_audio_prefix_latents(audio_entry, entry, branch_point)
+    if conditioning and head["cut_at_window_end"] and head_trim_k > 0:
+        # A window-end full freeze keeps the containing window's head share
+        # inside the frozen prefix; the conditioning grid would then start
+        # after that share and the Control Video's own first frame would be
+        # misaligned. Refuse until the conditioning path can account for it.
+        return None, ("conditioning cannot cut at a window end whose frozen head still covers a trimmed "
+                      "head share; move the branch point to a clean window end or inside the window")
     # The all-latent sidecar (LTX2 / Wan / LongCat / H3) carries two
     # head-side values in the prefix, each named for what it is.
     # ``containing_window_head_trim`` is the containing window's own
@@ -1173,6 +1246,10 @@ def _prepare_branch_prefix(entry, branch_point, carried, *, base_model_type, vid
         # the head block as ``branch_head_mode``; absent on legacy files,
         # which the reader reads as full freeze).
         "head_mode": "pixel_rule" if pixel_rule else "full_freeze",
+        # The model-window frame where the new segment begins, after the branch guide.
+        # Conditioning inputs (Control Video / reference images / mask) start here;
+        # they never condition the kept run.
+        "conditioning_start_frame": int(guide_frames),
     }
     if pixel_rule:
         # The re-denoised bridge: the tail N handed to the model and its decoded length O.

@@ -8446,9 +8446,23 @@ def generate_media(
             except Exception as exc:
                 _branch_decode_reason = str(exc)
                 raise gr.Error(_branch_decode_refusal(_branch_decode_reason))
+            # Conditioning (Control Video, mask, reference images) conditions only the new
+            # segment, so a conditioning branch uses the full freeze and never the pixel
+            # rule's re-denoised bridge; the setting is still honoured for plain branches.
+            _branch_conditioning_used = latent_jobs.branch_conditioning_requested(locals())
+            # The queue gate is the same refusal; repeat it here so a direct generation
+            # call cannot carry conditioning through a branch family that does not
+            # implement it (and cannot combine it with a Start Image or heavy guide).
+            _branch_conditioning_error = latent_jobs._branch_conditioning_conflict(
+                latent_ctx, model_type, locals(), branch_info=branch_latent_info)
+            if _branch_conditioning_error:
+                raise gr.Error(_branch_conditioning_error)
             # The setting picks the head window's freeze shape (the pixel rule by default, the full
             # freeze as the escape hatch); the family's declared capability decides whether it can.
             _branch_head_mode = str(server_config.get("latent_branch_head_mode") or "pixel_rule")
+            if _branch_conditioning_used:
+                _branch_head_mode = "full_freeze"
+                print("From latent: Control Video / reference / mask conditioning applies only to the new segment; the branch head uses the full freeze (the pixel-rule bridge is not combined with conditioning).")
             _branch_reuse_frames = min(sliding_window_size - latent_size, int(sliding_window_overlap or 0)) if test_any_sliding_window(model_type) else 0
             try:
                 branch_prefix, prefix_error = latent_jobs._prepare_branch_prefix(
@@ -8463,6 +8477,7 @@ def generate_media(
                     model_def=model_def,
                     head_mode=_branch_head_mode,
                     reuse_frames=_branch_reuse_frames,
+                    conditioning=_branch_conditioning_used,
                 )
             except Exception as exc:
                 if _all_latent_job and branch_decode is None:
@@ -8472,6 +8487,13 @@ def generate_media(
                     _option = ", or run the job without the latent file" if (branch_latent_info or {}).get("video_present", True) else ""
                     raise gr.Error(f"From latent: the branch prefix could not be prepared ({exc}) and the kept region cannot be decoded either; the branch is refused; change the setting{_option}.")
                 branch_prefix, prefix_error = None, str(exc)
+            if _branch_conditioning_used and branch_prefix is None:
+                raise gr.Error(
+                    "From latent: this branch carries Control Video / reference / mask conditioning, but the kept "
+                    "latent prefix could not be frozen for this job"
+                    + (f" ({prefix_error})" if prefix_error else "")
+                    + ". Conditioning is applied only to the new segment and requires a frozen LTX2 branch prefix; "
+                    "run the job without the latent file, or remove that conditioning.")
             if branch_prefix is not None and latent_jobs._is_h3_family(base_model_type, model_def):
                 # The MiniMax H3 branch prefix freezes the tensor's head, so
                 # the job modes that overwrite it (or that change its latent
@@ -9368,8 +9390,10 @@ def generate_media(
                 # special treatment for start frame pos when alignement to first frame requested as otherwise the start frame number will be negative due to overlapped frames (has been previously compensated later with padding)
                 audio_proj_split = get_window_audio_embeddings(audio_proj_full, audio_start_idx= aligned_window_start_frame + (source_video_overlap_frames_count if reset_control_aligment else 0 ), clip_length = current_video_length)
 
+            _branch_ref_shift = int(branch_prefix["kept_frames"]) if (branch_prefix is not None and window_no == 1) else alignment_shift
+            _branch_ref_overlap = int(branch_prefix["guide_frames"]) if (branch_prefix is not None and window_no == 1) else source_video_overlap_frames_count
             if repeat_no == 1 and window_no == 1 and image_refs is not None and len(image_refs) > 0:
-                frames_positions_list = prompt_enhancer_images.resolve_injected_positions(frames_positions, len(image_refs), windows=scheduled_windows if scheduler_active else default_windows, source_frames=source_video_frames_count, source_overlap=source_video_overlap_frames_count, window_size=sliding_window_size, discard_frames=sliding_window_discard_last_frames, reuse_frames=default_reuse_frames, alignment_shift=alignment_shift)
+                frames_positions_list = prompt_enhancer_images.resolve_injected_positions(frames_positions, len(image_refs), windows=scheduled_windows if scheduler_active else default_windows, source_frames=source_video_frames_count, source_overlap=_branch_ref_overlap, window_size=sliding_window_size, discard_frames=sliding_window_discard_last_frames, reuse_frames=default_reuse_frames, alignment_shift=_branch_ref_shift)
                 nb_frames_positions = len(frames_positions_list) 
                 if nb_frames_positions > 0:
                     frames_to_inject = [None] * (max(frames_positions_list) + 1)
@@ -9701,6 +9725,11 @@ def generate_media(
                     # head or froze these latents themselves.
                     latent_gen_kwargs["prefix_latents"] = branch_prefix["prefix_latents"]
                     latent_gen_kwargs["branch_head_mode"] = branch_prefix["head_mode"]
+                    if _branch_conditioning_used and branch_prefix.get("conditioning_start_frame") is not None:
+                        # LTX2 consumes a Control Video / reference image only on the
+                        # new segment: start its conditioning grid after the frozen guide.
+                        latent_gen_kwargs["branch_conditioning_start_frame"] = branch_prefix["conditioning_start_frame"]
+
                     if branch_prefix.get("prefix_audio_latents") is not None:
                         # The frozen audio is the file's own audio latents sliced to the
                         # span the model freezes, so the waveform re-encode is skipped.
