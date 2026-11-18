@@ -50,8 +50,7 @@ def calculate_x_ref_attn_map(qk_list, ref_target_masks, attn_bias=None):
 
     for _, ref_target_mask in enumerate(ref_target_masks):
         ref_target_mask = ref_target_mask[None, None, None, ...]
-        x_ref_attn_map = x_ref_attn_map_source.clone()
-        x_ref_attn_map = x_ref_attn_map * ref_target_mask
+        x_ref_attn_map = x_ref_attn_map_source * ref_target_mask
         x_ref_attn_map = x_ref_attn_map.sum(-1) / ref_target_mask.sum() 
         x_ref_attn_map = x_ref_attn_map.permute(0, 2, 1) 
         x_ref_attn_map = x_ref_attn_map.mean(-1) 
@@ -74,18 +73,23 @@ def get_attn_map_with_target(noise_q, key, shape, ref_target_masks=None, split_n
 
     _, seq_lens, heads, _ = noise_q.shape
     class_num, _ = ref_target_masks.shape
-    x_ref_attn_maps = torch.zeros(class_num, seq_lens).to(noise_q.device).to(noise_q.dtype)
+    x_ref_attn_maps = torch.zeros(class_num, seq_lens, device=noise_q.device, dtype=noise_q.dtype)
 
     split_chunk = heads // split_num
     
     # calculate attn map within each group and take the mean
-    for i in range(split_num):
-        qk_list = [
-            noise_q[:, :, i * split_chunk:(i + 1) * split_chunk, :],
-            ref_k[:, :, i * split_chunk:(i + 1) * split_chunk, :],
-        ]
-        x_ref_attn_maps_perhead = calculate_x_ref_attn_map(qk_list, ref_target_masks)
-        x_ref_attn_maps += x_ref_attn_maps_perhead
+    # Queries are independent. Bound the score matrix instead of retaining every
+    # video token's scores against the reference image at once.
+    rows = max(1, (32 * 1024 * 1024) // (split_chunk * x_seqlens * noise_q.element_size()))
+    for start in range(0, seq_lens, rows):
+        stop = min(start + rows, seq_lens)
+        for i in range(split_num):
+            qk_list = [
+                noise_q[:, start:stop, i * split_chunk:(i + 1) * split_chunk, :],
+                ref_k[:, :, i * split_chunk:(i + 1) * split_chunk, :],
+            ]
+            x_ref_attn_maps_perhead = calculate_x_ref_attn_map(qk_list, ref_target_masks)
+            x_ref_attn_maps[:, start:stop] += x_ref_attn_maps_perhead
     
     return x_ref_attn_maps / split_num
 

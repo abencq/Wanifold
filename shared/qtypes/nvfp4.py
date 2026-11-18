@@ -433,17 +433,8 @@ def _nvfp4_can_use_kernel(input, weight):
                 reason = "missing_scales"
             if reason is None and getattr(weight._input_global_scale, "is_meta", False):
                 reason = "input_global_scale_is_meta"
-            if reason is None and not _is_fake_tensor(input):
-                finite = weight.__dict__.get("_finite_input_scale")
-                if finite is None:  # checked once per weight: a device sync on every call otherwise, which CUDA graphs cannot capture
-                    try:
-                        finite = bool(torch.isfinite(weight._input_global_scale).all())
-                    except Exception as exc:
-                        finite = False
-                        reason = f"isfinite_error_{type(exc).__name__}"
-                    weight._finite_input_scale = finite
-                if finite is False and reason is None:
-                    reason = "input_global_scale_nonfinite"
+            # A non-finite input scale was refused when the weight was created
+            # (create: _allow_kernel), so no per-call device sync is needed here.
             if reason is None:
                 _nvfp4_stat("kernel_allowed")
                 return True
@@ -1054,7 +1045,18 @@ class _NVFP4RowProjection:
             q, scales = _lx_gemm.scaled_nvfp4_quant(x, scale)
             if weight._layout == _NVFP4_LAYOUT_TENSORCORE:
                 q = _nvfp4_swap_nibbles(q)
-        return q, scales, x.shape[0], x.dtype
+        return q, scales, x.shape[0], x.dtype, 0
+
+    @staticmethod
+    def slice_input(prepared, start, stop):
+        """Rows of the input (offload.linear_input_rows): the quantized rows from the 128-row block holding `start` (the swizzled block
+        scales store 128 rows together, the GEMM takes rows by 16), and the offset of `start` in it: rows() trims its output to them."""
+        if torch.is_tensor(prepared):
+            return prepared[start:stop]
+        q, scales, rows, dtype, offset = prepared
+        start, stop = start + offset, stop + offset
+        first = start // 128 * 128
+        return q[first:min(q.shape[0], -(-stop // 16) * 16)], scales[first:-(-stop // 128) * 128], stop - start, dtype, start - first
 
     @staticmethod
     def rows(module, prepared, start, stop):
@@ -1075,7 +1077,7 @@ class _NVFP4RowProjection:
                 dense = _dequantize_nvfp4_weight(data, scales, weight._input_global_scale, weight._alpha, prepared.dtype, prepared.device, layout=weight._layout)
                 out = torch.nn.functional.linear(prepared, dense, bias)
         else:
-            q, qs, rows, dtype = prepared
+            q, qs, rows, dtype, offset = prepared
             input_scale, alpha = weight._input_global_scale, weight._alpha
             if backend == _NVFP4_BACKEND_COMFY:
                 if weight._layout == _NVFP4_LAYOUT_TENSORCORE:
@@ -1091,7 +1093,7 @@ class _NVFP4RowProjection:
                     alpha = alpha * input_scale.float()
                 out = _lx_gemm.cutlass_scaled_nvfp4_mm(q.contiguous(), data.contiguous(), qs.contiguous(), scales.contiguous(),
                                                        alpha=alpha, bias=None if bias is None else bias.to(torch.bfloat16).contiguous())
-            out = out[:rows].to(dtype)
+            out = out[offset:offset + rows].to(dtype)
         return out[:, start - first:stop - first]
 
 

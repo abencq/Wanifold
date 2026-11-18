@@ -117,7 +117,7 @@ def _probe_audio_end_time(ffprobe_path: str, media_path: str, audio_index: int) 
             encoding="utf-8",
             errors="ignore",
             check=False,
-         **child_kwargs())
+            **child_kwargs())
         if result.returncode != 0:
             continue
         last_end = 0.0
@@ -185,7 +185,7 @@ def probe_selected_audio_overhang(ffprobe_path: str, media_path: str, audio_trac
                 encoding="utf-8",
                 errors="ignore",
                 check=False,
-             **child_kwargs())
+                **child_kwargs())
             if result.returncode != 0:
                 continue
             for raw_line in result.stdout.splitlines():

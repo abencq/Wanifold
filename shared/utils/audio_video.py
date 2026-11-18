@@ -518,7 +518,7 @@ def extract_audio_track_to_wav(video_path, output_path):
     import ffmpeg
     try:
         output_kwargs = {"map": f"0:a:{audio_track_index}", "acodec": "pcm_s16le"}
-        ffmpeg.input(source_path, **time_args).output(output_path, **output_kwargs).overwrite_output().run(cmd=_ffmpeg_binary(), quiet=True)
+        ffmpeg.input(source_path, **time_args).output(output_path, **output_kwargs).overwrite_output().global_args("-nostdin").run(cmd=_ffmpeg_binary(), quiet=True)
     except ffmpeg.Error as err:
         stderr = getattr(err, "stderr", b"")
         if isinstance(stderr, (bytes, bytearray)):
@@ -604,7 +604,7 @@ def extract_audio_tracks(source_video, verbose=False, query_only=False, codec_ke
             output_kwargs['b:a'] = audio_settings["bitrate"]
         if audio_settings.get("sample_fmt"):
             output_kwargs["sample_fmt"] = audio_settings["sample_fmt"]
-        ffmpeg.input(source_path, **time_args).output(temp_path, **output_kwargs).overwrite_output().run(cmd=_ffmpeg_binary(), quiet=not verbose)
+        ffmpeg.input(source_path, **time_args).output(temp_path, **output_kwargs).overwrite_output().global_args("-nostdin").run(cmd=_ffmpeg_binary(), quiet=not verbose)
 
     return file_paths, metadata
 
@@ -732,9 +732,10 @@ def subtitle_stream_count(path):
 
 
 def combine_video_with_audio_tracks(target_video, audio_tracks, output_video,
-                                     audio_metadata=None, audio_codec_key="aac_128", verbose=False, video_duration=None, subtitle_source=None):
-    """Mux audio tracks, and the subtitle tracks of subtitle_source when given, with the video stream of target_video."""
-    extra_audio_args = get_video_audio_extra_args(audio_codec_key, output_video)
+                                     audio_metadata=None, audio_codec_key="aac_128", verbose=False, video_duration=None, subtitle_source=None, audio_start_time=0.0):
+    """Mux audio from audio_start_time, limited to the picture's duration. The 'copy' codec preserves encoded audio packets.
+    Also mux the subtitle tracks of subtitle_source when given."""
+    extra_audio_args = [] if audio_codec_key == "copy" else get_video_audio_extra_args(audio_codec_key, output_video)
     if not audio_tracks and subtitle_source is None:
         if verbose: print("No audio tracks to combine."); return False
 
@@ -746,6 +747,8 @@ def combine_video_with_audio_tracks(target_video, audio_tracks, output_video,
 
     cmd = [_ffmpeg_binary(), '-y', '-i', target_video]
     for path in audio_tracks:
+        if audio_start_time > 0:
+            cmd += ['-ss', str(audio_start_time)]
         cmd += ['-i', path]
     if subtitle_source is not None:
         source_path, time_args, _ = _resolve_virtual_audio_segment(subtitle_source)
@@ -770,7 +773,7 @@ def combine_video_with_audio_tracks(target_video, audio_tracks, output_video,
         if (lang := meta.get('language')):
             cmd += ['-metadata:s:a:' + str(i), f'language={lang}']
 
-    audio_settings = get_mp4_audio_codec_settings(audio_codec_key)
+    audio_settings = {"codec": "copy", "bitrate": None} if audio_codec_key == "copy" else get_mp4_audio_codec_settings(audio_codec_key)
     cmd += ['-c:v', 'copy', '-c:a', audio_settings["codec"], *extra_audio_args]
     if audio_settings["bitrate"]:
         cmd += ['-b:a', audio_settings["bitrate"]]
