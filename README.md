@@ -28,7 +28,7 @@ build it offers is a Linux source build — those pull requests are Linux-specif
 oversight.
 
 The `main` branch here is an integration branch: current upstream, plus my own work — **116 files,
-+17 481 lines**, 149 authored commits, synced with upstream
++17 491 lines**, 150 authored commits, synced with upstream
 [`f4cfc125`](https://github.com/deepbeepmeep/WanGP/commit/f4cfc1259215577be9a2ee280c41efbedfb4459a)
 (WanGP v20.00). Everything general enough is submitted upstream, which means the 3 features below
 are **not in an official WanGP release today**.
@@ -156,20 +156,20 @@ frames.
 
 | Feature | What it does | Upstream pull request |
 |---|---|---|
-| SpargeAttn source build | SpargeAttn builds from source on Linux with CUDA 13 for the Python versions the prebuilt cp311 wheel does not cover; upstream wheel stays | [#2284](https://github.com/deepbeepmeep/WanGP/pull/2284) open |
-| LTX-2 compilation fix | Keep LTX-2 on CUDA Graph and stop the minutes-long first steps of PyTorch compilation; the Inductor cache of a session is kept and its shapes capped. The copy in this fork carries the measured RTX 5090 timings in docs/MODELS.md; its code lines are identical | [#2551](https://github.com/deepbeepmeep/WanGP/pull/2551) open |
-| Sol-Attn for LTX-2 | Optional Sol-Attn sparse self-attention for native LTX-2 inference (experimental) | [#2289](https://github.com/deepbeepmeep/WanGP/pull/2289) open |
-| Prompt enhancer on GGUF | Prompt enhancement keeps loading when Auto cannot size the drafter: where WanGP cannot read the drafter, Auto decides on the model's own size instead of the prompt enhancer failing to start | [#2553](https://github.com/deepbeepmeep/WanGP/pull/2553) open |
-| Console time stamps | Time stamps at the start of the console lines WanGP prints, on the lines the terminal draws only | [#2568](https://github.com/deepbeepmeep/WanGP/pull/2568) open |
 | LongCat sparse attention indentation | LongCat sparse attention no longer stops a compile check with an IndentationError, and the attention calculations are unchanged | [#2664](https://github.com/deepbeepmeep/WanGP/pull/2664) open |
+| Audio handover of a continued video | Continuing a video with its original soundtrack leaves a short silence where the source soundtrack ends before its picture | [#2643](https://github.com/deepbeepmeep/WanGP/pull/2643) open |
+| Ovi Audio Guidance | Audio Guidance setting ignored by Ovi generations, which ran at a fixed 4.0 | ~~[#2600](https://github.com/deepbeepmeep/WanGP/pull/2600)~~ **addressed upstream, not merged** ![addressed upstream](https://img.shields.io/badge/addressed%20upstream-orange) in WanGP v19.25 [`0e0a06f6`](https://github.com/deepbeepmeep/WanGP/commit/0e0a06f6) |
+| Console time stamps | Time stamps at the start of the console lines WanGP prints, on the lines the terminal draws only | [#2568](https://github.com/deepbeepmeep/WanGP/pull/2568) open |
+| Silent startup | SyntaxWarning printed at startup by the About tab credits line | ~~[#2565](https://github.com/deepbeepmeep/WanGP/pull/2565)~~ **addressed upstream, not merged** ![addressed upstream](https://img.shields.io/badge/addressed%20upstream-orange) in upstream's own 3D update of 2026-11-03 |
+| Prompt enhancer on GGUF | Prompt enhancement keeps loading when Auto cannot size the drafter: where WanGP cannot read the drafter, Auto decides on the model's own size instead of the prompt enhancer failing to start | [#2553](https://github.com/deepbeepmeep/WanGP/pull/2553) open |
+| LTX-2 compilation fix | Keep LTX-2 on CUDA Graph and stop the minutes-long first steps of PyTorch compilation; the Inductor cache of a session is kept and its shapes capped. The copy in this fork carries the measured RTX 5090 timings in docs/MODELS.md; its code lines are identical | [#2551](https://github.com/deepbeepmeep/WanGP/pull/2551) open |
+| Live shell after Ctrl+C | Shell prompt left dead after Ctrl+C in a WanGP run | [#2526](https://github.com/deepbeepmeep/WanGP/pull/2526) open |
+| Empty-audio crash | Crash when saving audio that came out empty | ~~[#2482](https://github.com/deepbeepmeep/WanGP/pull/2482)~~ **addressed upstream, not merged** ![addressed upstream](https://img.shields.io/badge/addressed%20upstream-orange) in WanGP v18.19 [`16bab9e2`](https://github.com/deepbeepmeep/WanGP/commit/16bab9e2) |
+| “Continue Video” joins | “Continue Video” audio joins when the soundtrack ends early | [#2478](https://github.com/deepbeepmeep/WanGP/pull/2478) open |
+| Sol-Attn for LTX-2 | Optional Sol-Attn sparse self-attention for native LTX-2 inference (experimental) | [#2289](https://github.com/deepbeepmeep/WanGP/pull/2289) open |
 | Sliding window up to 999 frames | Sliding Window sizes up to 999 frames for every video model | [#2288](https://github.com/deepbeepmeep/WanGP/pull/2288) open |
 | x264 MJPEG codec | x264 MJPEG (intra-frame-only) video codec option | [#2287](https://github.com/deepbeepmeep/WanGP/pull/2287) open |
-| Audio handover of a continued video | Continuing a video with its original soundtrack leaves a short silence where the source soundtrack ends before its picture | [#2643](https://github.com/deepbeepmeep/WanGP/pull/2643) open |
-| “Continue Video” joins | “Continue Video” audio joins when the soundtrack ends early | [#2478](https://github.com/deepbeepmeep/WanGP/pull/2478) open |
-| Live shell after Ctrl+C | Shell prompt left dead after Ctrl+C in a WanGP run | [#2526](https://github.com/deepbeepmeep/WanGP/pull/2526) open |
-| Ovi Audio Guidance | Audio Guidance setting ignored by Ovi generations, which ran at a fixed 4.0 | ~~[#2600](https://github.com/deepbeepmeep/WanGP/pull/2600)~~ **addressed upstream, not merged** ![addressed upstream](https://img.shields.io/badge/addressed%20upstream-orange) in WanGP v19.25 [`0e0a06f6`](https://github.com/deepbeepmeep/WanGP/commit/0e0a06f6) |
-| Empty-audio crash | Crash when saving audio that came out empty | ~~[#2482](https://github.com/deepbeepmeep/WanGP/pull/2482)~~ **addressed upstream, not merged** ![addressed upstream](https://img.shields.io/badge/addressed%20upstream-orange) in WanGP v18.19 [`16bab9e2`](https://github.com/deepbeepmeep/WanGP/commit/16bab9e2) |
-| Silent startup | SyntaxWarning printed at startup by the About tab credits line | ~~[#2565](https://github.com/deepbeepmeep/WanGP/pull/2565)~~ **addressed upstream, not merged** ![addressed upstream](https://img.shields.io/badge/addressed%20upstream-orange) in upstream's own 3D update of 2026-11-03 |
+| SpargeAttn source build | SpargeAttn builds from source on Linux with CUDA 13 for the Python versions the prebuilt cp311 wheel does not cover; upstream wheel stays | [#2284](https://github.com/deepbeepmeep/WanGP/pull/2284) open |
 
 The table lists what is **open upstream**, what upstream has **accepted** — the latter as **Merged**
 ![merged](https://img.shields.io/badge/merged-brightgreen) — and the pull requests upstream answered
@@ -191,5 +191,5 @@ puts them, so switching either way keeps them.
 > their dates in **[docs/FORK.md](docs/FORK.md)**, and keeps the upstream licence, the in-tree notices and the
 > [third-party licence texts](docs/third_party_licenses/).
 
-<!-- front page: regenerated 2026-11-18 · 116 files +17481 lines · 149 authored commits · 15 open, 0 merged upstream -->
+<!-- front page: regenerated 2026-11-19 · 116 files +17491 lines · 150 authored commits · 15 open, 0 merged upstream -->
 <!-- END GENERATED -->
