@@ -24,8 +24,8 @@ REF = 'refs/remotes/origin/main'
 WORDS = ['docs/fork-features.md', 'scripts/fork-pr-notes.json', 'scripts/fork-pr-table.sh']
 # The two pages the generator writes are not fork work, and the generator leaves them out of the size it
 # prints: the same rule here, or this reminder nags about the difference between two numbers that mean
-# the same thing.
-NOT_FORK_WORK = ('README.md', 'docs/FORK.md')
+# the same thing. The fork-only tests suite is excluded the same way.
+NOT_FORK_WORK = ('README.md', 'docs/FORK.md', 'tests/')
 
 # git hands the refs to push on stdin; an empty stdin means the push carries nothing to do.
 if not sys.stdin.read().strip():

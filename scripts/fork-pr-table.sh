@@ -52,8 +52,8 @@ ledger = os.path.join(root, 'docs', 'FORK.md')
 front = os.path.join(root, 'README.md')
 # The two pages this script writes are not this fork's work: the size on the front page counts the code
 # the fork added, not the generated prose that describes it, and it stopped counting upstream's page the
-# day the fork stopped copying it.
-NOT_FORK_WORK = ('README.md', 'docs/FORK.md')
+# day the fork stopped copying it. The fork-only tests suite is excluded too: it is not part of the app.
+NOT_FORK_WORK = ('README.md', 'docs/FORK.md', 'tests/')
 mode = os.environ['FORK_TABLE_MODE']
 fixtures = os.environ.get('FORK_TABLE_FIXTURES')   # a dir holding api.json: then no network at all
 BEGIN, END = '<!-- BEGIN GENERATED', '<!-- END GENERATED -->'
@@ -290,8 +290,8 @@ def fork_size():
     The commits are counted without merges, so a sync with upstream cannot inflate them, and
     without the commits that only refresh the two generated pages: publishing the page is not
     work, and a headline number that moves every time it is published is never true of anything.
-    The two generated pages are excluded by name: the fork claims no authorship of prose it
-    regenerates, and a headline that moved every time the pages were refreshed would measure nothing.
+    The two generated pages and the fork-only tests suite are excluded by name: the fork claims no
+    authorship of prose it regenerates, and the tests are not part of the app's code size.
     """
     keep = ['--', '.'] + [':(exclude)%s' % p for p in NOT_FORK_WORK]
     names = [l for l in git('diff', '--name-only', '%s...HEAD' % REF, *keep).splitlines() if l.strip()]
@@ -302,7 +302,7 @@ def fork_size():
             adds += int(p[0]) if p[0].isdigit() else 0
             dels += int(p[1]) if p[1].isdigit() else 0
     commits = git('rev-list', '--count', '--author=%s' % author, '--no-merges', '%s...HEAD' % REF,
-                  '--', '.', ':(exclude)README.md', ':(exclude)docs/FORK.md')
+                  *keep)
     return len(names), adds, dels, (commits or '?')
 
 def wrap(text, width=100):
@@ -446,7 +446,7 @@ F = ['<!-- BEGIN GENERATED (front page) by scripts/fork-pr-table.sh -- do not ed
      '![synced with upstream](https://img.shields.io/badge/synced_with_upstream-%s-orange)' % tip,
      SHIELDS_OPEN, SHIELDS_MERGED, '', sec['intro'], '',
      wrap('The `main` branch here is an integration branch: current upstream, plus my own work — '
-          '**%s files, +%s lines**, %s authored commits, %s. %s %s.'
+          '**%s files, +%s lines** (excluding an added `tests/` suite), %s authored commits, %s. %s %s.'
           % (num(files_n), num(adds_n), commits_n, synced, claim.rstrip('.'), release_claim())), '']
 def wip_callout(f):
     """The line a section carries while its feature is still being reworked in this fork.
