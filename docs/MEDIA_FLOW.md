@@ -28,9 +28,12 @@ Each process applies one task with one model. Pick the model first: the **Proces
 | **Detail** | Adds fine texture and sharper edges. | Generated or upscaled videos that look smooth or plastic. |
 | **Upscale** | Increases the resolution. | Low-resolution sources, or a final pass before delivery. |
 | **Interpolate** | Adds frames between frames for smoother motion and a higher frame rate. | Choppy or low frame rate videos. |
+| **Latent Decode** | Rebuilds a video from its saved `*_latent.pt` companion file without loading the diffusion model. For LTX2, MiniMax H3, Magi Human and Ovi it also rebuilds the soundtrack. | Generated videos whose latents were saved with *Save Latents*. |
 | **User Settings** | Runs your own WanGP settings on each piece of the source. | Workflows not covered by the built-in processes. |
 
 Some processes need a large model and a recent GPU, others (such as Lanczos) are almost instant. Processes marked **Legacy** use an older model version and are kept for comparison.
+
+**Latent Decode** is a special process: it has no prompt and loads no diffusion model. It reads the companion file next to the source video and writes `<source>_latent_decode.<ext>`. A video without a companion file is refused, so enable *Save Latents* when generating it.
 
 **Your own settings:** in WanGP, select a model that can continue a source video, enable its **Control Video**, disable **Reference Images** and audio inputs, and save your settings. In Media Flow, choose **Add User Settings** in the **Model** list, pick that settings file in **Process** and click the **+** button. Linked settings appear under their model, marked with an asterisk; the bin button unlinks them. Image settings work the same way with an image model.
 

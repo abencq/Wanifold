@@ -243,8 +243,8 @@ def _is_longcat_family(ctx, base_model_type, model_def):
 
 def _is_all_latent_family(ctx, base_model_type, model_def):
     """Whether the model family writes the all-latent sidecar (LTX2, Wan,
-    LongCat, MiniMax H3 and Magi Human: the sidecar is the sole content
-    source)."""
+    LongCat, MiniMax H3, Magi Human and Ovi: the sidecar is the sole content
+    source). Ovi is included through the Wan family's handler."""
     return (_is_ltx2_family(base_model_type, model_def)
             or _is_wan_family(ctx, base_model_type, model_def)
             or _is_longcat_family(ctx, base_model_type, model_def)
@@ -342,13 +342,15 @@ DETECTED_COMPANION_VIDEO_LABEL = "Detected companion video file (used for previe
 BRANCH_LATENT_FILE_LABEL = "Select *_latent.pt file"
 DETECTED_LATENT_FILE_LABEL = "Detected latent file (matched to the selected video)"
 # The *From latent* checkbox's tooltip: which families the mode applies to
-# and the one re-compression caveat (the full support table is in
-# docs/SETTINGS.md).
+# and how the two head modes keep the pre-cut section (the full support table
+# is in docs/SETTINGS.md).
 BRANCH_LATENT_TOOLTIP = ("Branch from a saved latent file (written by the 'Save Latents' option). "
-                         "LTX2 / Wan / LongCat / MiniMax H3 only. Some models keep the pre-cut section "
-                         "by re-compression, not bit-identically (see docs/SETTINGS.md). The frame count is "
-                         "the new segment added after the kept part, as in the classic continuation; the job "
-                         "log prints the planned total before generation.")
+                         "LTX2 / Wan / Ovi / LongCat / MiniMax H3 / Magi Human. The default pixel_rule "
+                         "decodes the kept run and re-denoises the handoff overlap; on Ovi, Magi Human "
+                         "and the Wan text-to-video classes that overlap is re-encoded as the frozen head. "
+                         "full_freeze keeps the kept latents verbatim where the family supports that prefix. "
+                         "See docs/SETTINGS.md. The frame count is the new segment added after the kept part; "
+                         "the job log prints the planned total before generation.")
 
 
 def _branch_family_mismatch_error(ctx, entry, model_type, base_model_type):
@@ -678,36 +680,22 @@ def validate_latent_branch_task(ctx, state, model_type, inputs):
 
 
 # ---------------------------------------------------------------------------
-# Latent Branch: the branch job reuses the sidecar's kept latents
-# as its head window's frozen prefix instead of re-encoding the source
-# pixels: the head window's denoised tensor is [the kept latents (verbatim
-# from the sidecar) | new latents], the kept portion stays bit-identical
-# through the whole run (the model re-freezes it at every denoise step),
-# and the sidecar's kept windows carry over into the branch job's own
-# companion file. The model-side substitution is per family (Wan: the i2v
-# guide latents or the ti2v source latents; LongCat: the cond latents run).
+# Latent Branch: the branch job reuses the sidecar's kept latents instead
+# of re-encoding the source pixels. With the full freeze, the head window's
+# denoised tensor is [the kept latents (verbatim from the sidecar) | new
+# latents], and the kept portion stays bit-identical through the whole run
+# (the model re-freezes it at every denoise step). With the default pixel
+# rule, the kept run is decoded from the file and the handoff overlap is
+# re-denoised; for an encoded-head family (the Wan text-to-video classes,
+# Ovi and Magi Human) that overlap tail is decoded and re-encoded as the
+# frozen head. The sidecar's kept windows carry over into the branch job's
+# own companion file. The model-side substitution is per family (Wan: the
+# i2v guide latents or the ti2v source latents; LongCat: the cond latents run).
 # The frame math lives in shared/utils/latent_io.branch_head_window.
 # ---------------------------------------------------------------------------
 
-_BRANCH_PREFIX_MODEL_TYPES = {
-    # The 16-channel 4/1 Wan-VAE families the prefix substitution supports:
-    # the 14B i2v class (1.3 / 1.4 / 2.2 share the VAE), the 14B t2v class
-    # (1.3B / 14B / 2.2 / shotplan: the standard text-to-video flow, the
-    # frozen head enters through the timestep-0 injection) and the ti2v 5B
-    # (source-latent path), plus the LongCat family (Wan VAE, 4/1).
-    "i2v", "i2v_2_2", "ti2v_2_2",
-    "t2v", "t2v_1.3B", "t2v_2_2", "shotplan_t2v", "shotplan_t2v_2_2",
-    "longcat_video", "longcat_avatar", "longcat_avatar_v1_5",
-    # LTX2: 8/1 causal layout, 32x spatial compression. The latent
-    # channel count varies with the VAE version (128 for the 2.3/2.5 VAEs),
-    # so the VAE identity is checked through the checkpoint instead.
-    "ltx2_19B", "ltx2_22B", "ltx2_25_22B",
-    # MiniMax H3: the piecewise 5/17 latent-to-pixel layout (the
-    # linear stride/offset check is skipped for it), 16x spatial
-    # compression, family-stable 24-channel VAE.
-    "minimax_h3_fl2va", "minimax_h3_fl2va_pruned", "minimax_h3_ref2va",
-    "minimax_h3_ref2va_pruned", "minimax_h3_tts_ref2va_pruned", "viggle_animate",
-}
+# The actual prefix support is the per-family layout table below. A base type
+# outside it cannot carry the kept latents and rebuilds its prefix instead.
 
 
 # The branch-prefix substitution is VAE-specific: the kept latents must
@@ -760,19 +748,29 @@ _BRANCH_PREFIX_LAYOUTS = {
 }
 
 
-def _branch_prefix_advisory(ctx, model_type):
-    """The one-line advisory for the branch info box: the job's family
-    writes the all-latent sidecar, but its base type is not in
-    ``_BRANCH_PREFIX_LAYOUTS``, so the kept latents cannot be copied
-    bit-identically — the pre-cut section is kept by re-compression (a
-    fresh encode of a fresh decode of the source file's kept latents).
-    Returns "" when the prefix is bit-identical (or the family does not
-    write latent files at all).
+def _branch_prefix_advisory(ctx, model_type, head_mode=None):
+    """The one-line advisory for the branch info box, read from the selected
+    head mode. The default ``pixel_rule`` re-denoises the handoff overlap;
+    on an ``encoded_head`` family it decodes the kept tail and re-encodes it
+    as the frozen head, so the handoff is not bit-identical. ``full_freeze``
+    copies the kept latents verbatim and re-freezes them. A family whose base
+    type is not in ``_BRANCH_PREFIX_LAYOUTS`` keeps the pre-cut section by
+    re-compression regardless of the mode. Returns "" for a full-freeze branch
+    with a carried prefix (bit-identical) or a family that does not write
+    latent files at all.
     """
-    base_model_type = ctx.get_base_model_type(model_type)
-    if _is_all_latent_family(ctx, base_model_type, ctx.get_model_def(model_type)) \
-            and str(base_model_type or "") not in _BRANCH_PREFIX_LAYOUTS:
+    base_model_type = str(ctx.get_base_model_type(model_type) or "")
+    model_def = ctx.get_model_def(model_type)
+    if not _is_all_latent_family(ctx, base_model_type, model_def):
+        return ""
+    if base_model_type not in _BRANCH_PREFIX_LAYOUTS:
         return "Note: this model keeps the pre-cut section by re-compression, not bit-identically."
+    mode = str(head_mode or ctx.server_config.get("latent_branch_head_mode") or "pixel_rule").strip()
+    capability = branch_pixel_rule_capability(base_model_type, model_def)
+    if mode == "pixel_rule" and capability is not None:
+        if capability == "encoded_head":
+            return "Note: with the default pixel_rule, this model re-encodes the handoff tail as the branch head; full_freeze keeps the pre-cut latents verbatim."
+        return "Note: with the default pixel_rule, this model re-denoises the handoff overlap; full_freeze keeps the pre-cut latents verbatim."
     return ""
 
 
@@ -1190,8 +1188,8 @@ def _prepare_branch_prefix(entry, branch_point, carried, *, base_model_type, vid
         # misaligned. Refuse until the conditioning path can account for it.
         return None, ("conditioning cannot cut at a window end whose frozen head still covers a trimmed "
                       "head share; move the branch point to a clean window end or inside the window")
-    # The all-latent sidecar (LTX2 / Wan / LongCat / H3) carries two
-    # head-side values in the prefix, each named for what it is.
+    # The all-latent sidecar (LTX2 / Wan / Ovi / LongCat / MiniMax H3 /
+    # Magi Human) carries two head-side values in the prefix, each named for what it is.
     # ``containing_window_head_trim`` is the containing window's own
     # recorded head trim (0 for an all-latent t2v window 1, the i2v image
     # slot for an i2v window 1, the window's own overlap for k > 1) — the
@@ -1503,7 +1501,7 @@ def _all_latent_sidecar(ctx, latent_entry, latent_audio_entry, window_no, latent
                         splices_exact_image=True, branch_carried_image=None,
                         branch_cut_video_block=None, branch_cut_audio_block=None,
                         branch_entry_head_mode=None, branch_audio_join_seconds=0.0):
-    """Build the all-latent sidecar for one LTX2 / Wan / LongCat / MiniMax H3 job window.
+    """Build the all-latent sidecar for one LTX2 / Wan / Ovi / LongCat / MiniMax H3 / Magi Human job window.
 
     The all-latent sidecar is the sole content source of the video: one
     block per window with its own prompt/seed/steps/denoising strength, the
@@ -1513,9 +1511,9 @@ def _all_latent_sidecar(ctx, latent_entry, latent_audio_entry, window_no, latent
     video, so the sidecar embeds that image as lossless PNG bytes (a branch
     job propagates the source sidecar's embedded image verbatim — content,
     not a pointer) and its i2v head trim drops the decoded round-trip frame
-    the splice replaces; Wan, LongCat and MiniMax H3 keep the decoded
-    latent frame instead (the start image is a model condition, never
-    spliced into the video), so their sidecars embed no image block and
+    the splice replaces; Wan, Ovi, LongCat, MiniMax H3 and Magi Human keep
+    the decoded latent frame instead (the start image is a model condition,
+    never spliced into the video), so their sidecars embed no image block and
     their i2v head trim keeps that frame. ``branch_carried_image`` is the same propagated block
     for a branch whose prefix this run rejected (``branch_prefix`` is None):
     the kept region's fresh decode spliced the source sidecar's image into
@@ -1612,7 +1610,7 @@ def _all_latent_sidecar(ctx, latent_entry, latent_audio_entry, window_no, latent
             else:
                 head_trim = int(branch_sidecar.get("containing_window_head_trim") or 0)
         else:
-            # The full freeze (LTX2, Wan, LongCat, Magi Human): the kept latents are frozen at the
+            # The full freeze (LTX2, Wan, Ovi, LongCat, Magi Human): the kept latents are frozen at the
             # head of this window's own run, so the block carries the kept region and records the
             # containing window's own head trim. The exception is a window-end cut whose kept run
             # is longer than that frozen head: those frames come from a stand-alone decode, so the
@@ -2856,6 +2854,10 @@ def edit_latent_job(ctx, send_cmd, state, video_source, client_id="", plugin_dat
     api_options = plugin_data.get("api", {}) if isinstance(plugin_data, dict) and isinstance(plugin_data.get("api"), dict) else {}
     api_return_video_uint8, api_return_audio = get_api_output_options(plugin_data)
     api_suppress_metadata_images = bool(api_options.get("suppress_metadata_images"))
+    latent_action = str(api_options.get("latent_action") or "decode").strip().lower()
+    if latent_action != "decode":
+        send_cmd("error", gr.Error(f"Unsupported latent action: {latent_action}. Latent Decode supports only 'decode'."))
+        return
 
     latent_source = str(api_options.get("latent_source") or "")
     if len(latent_source) == 0:
@@ -3048,16 +3050,25 @@ def edit_latent_job(ctx, send_cmd, state, video_source, client_id="", plugin_dat
     ctx.clear_status(state)
 
 
-def validate_latent_decode(inputs):
+def validate_latent_decode(inputs, api_options=None):
     """Validate a *Latent Decode* job's inputs (moved from ``wgp``'s
     ``validate_task``); returns the error message, or "" when the job is
-    runnable."""
+    runnable. ``api_options`` is the task's ``_api`` dictionary when the job
+    comes through the API: ``latent_source`` can name a companion file that is
+    not next to ``video_source``, and ``latent_action`` must be ``decode``."""
     video_source = inputs.get("video_source")
     if not media_source_exists(video_source):
         return "Selected video or image file is missing"
     if not has_video_file_extension(video_source):
         return "Latent decoding is only available with Videos"
-    if latent_io.find_latent_file(video_source) is None:
+    api_options = api_options if isinstance(api_options, dict) else {}
+    latent_action = str(api_options.get("latent_action") or "decode").strip().lower()
+    if latent_action != "decode":
+        return f"Unsupported latent action: {latent_action}. Latent Decode supports only 'decode'."
+    latent_source = str(api_options.get("latent_source") or "").strip()
+    if len(latent_source) == 0:
+        latent_source = latent_io.find_latent_file(video_source) or ""
+    if len(latent_source) == 0 or not os.path.isfile(latent_source):
         return "No saved latent companion file was found next to this video. Latent decoding only works on media generated with the 'Save Latents' option enabled."
     return ""
 
@@ -3368,7 +3379,8 @@ def plan_branch_head_window(ctx, *, branch_latent_info, branch_prefix, branch_de
         if branch_prefix is not None:
             _plan_prefix = "From latent"
             _plan_kept = int(branch_prefix["kept_frames"])
-            _plan_kept_part = f"kept {_plan_kept} (verbatim)"
+            _plan_mode = str(branch_prefix.get("head_mode") or "full_freeze")
+            _plan_kept_part = f"kept {_plan_kept} ({'pixel rule' if _plan_mode == 'pixel_rule' else 'verbatim'})"
         elif branch_decode is not None:
             _plan_prefix = "From latent"
             _plan_kept = int(branch_decode[1])
@@ -3477,8 +3489,8 @@ class LatentWindowRecorder:
                 # ``splices_exact_image`` is the only family
                 # difference: True for LTX2 (the exact start image is
                 # spliced into frame 0 and embedded) and False for
-                # Wan / LongCat / MiniMax H3 (the decoded latent frame
-                # is kept, no image block).
+                # Wan / Ovi / LongCat / MiniMax H3 / Magi Human (the decoded
+                # latent frame is kept, no image block).
                 _all_latent_splices = _is_ltx2_family(str(self._base_model_type or ""), self._model_def)
                 # The i2v start image is embedded, the trims are
                 # recorded per window, and the committed length
@@ -3507,18 +3519,16 @@ class LatentWindowRecorder:
                 # are not in scope in this block (the post-processing paths
                 # rewrite them), so derive the canvas from the latent grid the
                 # entry carries and the family's spatial factor (8 for the
-                # Wan-VAE families, 16 for the 5B Wan 2.2 VAE, MiniMax H3 and
-                # Magi Human, 32 for LTX2 — the _BRANCH_PREFIX_LAYOUTS table,
-                # with the factor the family predicate knows for the families
-                # not in the table yet).
+                # Wan-VAE families, 16 for the 5B Wan 2.2 VAE families
+                # including Ovi, MiniMax H3 and Magi Human, 32 for LTX2 — the
+                # _BRANCH_PREFIX_LAYOUTS table, with the family predicate as
+                # the fallback for a sidecar whose base type is not in it).
                 _latent_layout = _BRANCH_PREFIX_LAYOUTS.get(str(self._base_model_type or ""))
                 if _latent_layout is not None:
                     _latent_canvas_factor = int(_latent_layout[2])
                 elif _is_magi_human_family(str(self._base_model_type or ""), self._model_def):
-                    # The Turbo VAED's spatial compression (Magi is not
-                    # in the prefix table yet — the branch's frozen prefix
-                    # is not supported — but the canvas factor is known,
-                    # so the sidecar records the true canvas).
+                    # The Turbo VAED's spatial compression, for a Magi sidecar
+                    # whose base type is not in the prefix table.
                     _latent_canvas_factor = 16
                 else:
                     _latent_canvas_factor = 0

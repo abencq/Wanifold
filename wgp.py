@@ -8058,8 +8058,8 @@ def generate_media(
             print(f"From latent: using saved latent file {_pre_info['path']}{_pre_video_part} ({_pre_branch['total_frames']} frames recorded; you asked for frame {_pre_info['branch_frame']}, the cut lands at frame {_pre_branch['kept_frames']}).", flush=True)
         else:
             print(f"From latent: using saved latent file {_pre_info['path']}{_pre_video_part} ({_pre_branch['total_frames']} frames recorded; cut at frame {_pre_branch['kept_frames']}).", flush=True)
-    # LTX2 / Wan / LongCat / MiniMax H3 + Save Latents: the sidecar is the
-    # sole content source, so a continuation job that would record latents
+    # LTX2 / Wan / Ovi / LongCat / MiniMax H3 / Magi Human + Save Latents:
+    # the sidecar is the sole content source, so a continuation job that would record latents
     # must also source its kept region from the source video's sidecar
     # (copied latents, never re-extracted pixels) — a continuation left
     # unconverted would write a sidecar whose committed length cannot match
@@ -8412,8 +8412,8 @@ def generate_media(
         else:
             where = f"on a latent block boundary of window {branch['window_no']}"
         print(f"From latent: branching from {os.path.basename(branch_latent_info['path'])}: cut at frame {branch['kept_frames']} of {branch['total_frames']}, {where}{overrun_note}.")
-        # An all-latent-family job (LTX2 / Wan / LongCat / MiniMax H3)
-        # that writes latents produces an all-latent sidecar: the kept
+        # An all-latent-family job (LTX2 / Wan / Ovi / LongCat / MiniMax H3 /
+        # Magi Human) that writes latents produces an all-latent sidecar: the kept
         # latents must be carried into it (a carried-window failure is
         # fatal — without them the file could not be self-contained),
         # and where the branch prefix itself is rejected the head window
@@ -10976,7 +10976,11 @@ def validate_task(task, state, skip_validate_settings=False):
                 if len(temporal_upsampling) == 0 and len(spatial_upsampling) == 0 and not is_film_grain_enabled(inputs.get("film_grain_intensity", 0)):
                     validation_error = "You must choose at least one Post Processing Method"
         elif mode == "edit_latent":
-            validation_error = latent_jobs.validate_latent_decode(inputs)
+            api_options = inputs.get("_api")
+            if not isinstance(api_options, dict):
+                plugin_data = task.get("plugin_data", {}) if isinstance(task.get("plugin_data", {}), dict) else {}
+                api_options = plugin_data.get("api", {}) if isinstance(plugin_data.get("api", {}), dict) else {}
+            validation_error = latent_jobs.validate_latent_decode(inputs, api_options=api_options)
         elif mode == "edit_remux":
             video_source = inputs.get("video_source")
             postprocess_audio = audio_processor_api.normalize_method(inputs.get("postprocess_audio", "") or "")
@@ -14064,8 +14068,8 @@ def generate_media_tab(update_form = False, state_dict = None, ui_defaults = Non
                 # (both components are hidden).
                 branch_from_latent_value = bool(ui_get("branch_from_latent", False))
                 # The *From latent* mode applies to the latent-writing
-                # families only (LTX2 / Wan / LongCat / MiniMax H3): for
-                # every other model the mode is dormant — hidden (the
+                # families only (LTX2 / Wan / Ovi / LongCat / MiniMax H3 /
+                # Magi Human): for every other model the mode is dormant — hidden (the
                 # stored value is preserved), the classic labels stay,
                 # and a job started with it on runs as a normal job
                 # (never a refusal).

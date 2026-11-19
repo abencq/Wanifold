@@ -850,6 +850,10 @@ Current keys:
   - Requests returned media artifacts in `result.artifacts`.
   - Video outputs return `artifact.video_tensor_uint8` when WanGP can expose a contiguous `uint8` tensor.
   - Audio outputs return `artifact.audio_tensor` and `artifact.audio_sampling_rate` when available.
+- `_api={"latent_source": "<path>"}` for an `edit_latent` task
+  - Names the companion `*_latent.pt` file. If omitted, WanGP finds the companion file next to `video_source`.
+- `_api={"latent_action": "decode"}` for an `edit_latent` task
+  - `decode` is the only supported action; other values are refused.
 
 Example:
 
@@ -872,7 +876,7 @@ video_tensor = artifact.video_tensor_uint8
 
 ### Late Postprocessing And Media Editing
 
-The API can submit WanGP late postprocessing jobs through the same queue, manifest, and MCP paths as generation jobs. These tasks set `mode` explicitly and do not need a normal generation `model_type`; `generate_media(...)` routes them to `edit_media(...)` or `edit_audio(...)`.
+The API can submit WanGP late postprocessing jobs through the same queue, manifest, and MCP paths as generation jobs. These tasks set `mode` explicitly and do not need a normal generation `model_type`; `generate_media(...)` routes them to `edit_media(...)`, `edit_audio(...)` or `edit_latent(...)`.
 
 Convenience helpers are available for the common edit task shapes:
 
@@ -981,6 +985,9 @@ Raw task modes:
 | `edit_postprocessing` | `video_source` | `temporal_upsampling`, `spatial_upsampling`, `spatial_postprocessing_parameters` / `temporal_postprocessing_parameters` (each processor's options by id), `postprocessing_reference_images`, `film_grain_intensity`, `film_grain_saturation` |
 | `edit_remux` | `video_source` | `postprocess_audio`, `audio_source`, `postprocess_audio_prompt`, `postprocess_audio_neg_prompt`, `replace_voice_sample`, `replace_voice_sample2` |
 | `edit_audio` | `audio_source` | `postprocess_audio`, `replace_voice_sample`, `replace_voice_sample2` |
+| `edit_latent` | `video_source` | `_api.latent_source` (optional companion file; defaults to the file next to `video_source`), `_api.latent_action` (`decode`) |
+
+`edit_latent` does not load a diffusion model. It reads the `model_type` recorded in the companion file. If `_api.latent_source` is omitted, WanGP finds the `*_latent.pt` file next to `video_source`. `_api.latent_action` is `decode`; other values are refused. The decoded video is written as `<source>_latent_decode.<ext>`.
 
 ### Single Task
 

@@ -45,8 +45,12 @@ is spent once and the output can be tuned. And a shot you like stops being a one
 and the latent file is their second starting point, the exact latent the model ended on. From
 the video, the branch re-encodes the part you keep, and the quality steps down a little with every
 continuation built on the last. From the latent file, the kept part comes out at the quality of the
-original generation, seed and work preserved. For LTX2, MiniMax H3, Magi Human and Ovi the file
-also holds the audio latent, so the audio is re-decoded with it too.
+original generation, seed and work preserved. With the default *Latent Branch: Head Window Freeze*
+choice, the frames around the cut are re-denoised; Ovi, Magi Human and the Wan text-to-video
+classes re-encode the kept tail as the new head, so that handoff is not bit-identical. *Full
+freeze (legacy)* keeps the kept latents verbatim where the family supports that prefix. For
+LTX2, MiniMax H3, Magi Human and Ovi the file also holds the audio latent, so the audio is
+re-decoded with it too.
 
 <!-- image -->
 
