@@ -492,9 +492,13 @@ for n in sorted(addressed):
               % (n, info[n]['state']), file=sys.stderr)
 addressed_nums = [n for n in sorted(addressed) if n in info and info[n]['state'] == 'closed']
 F += ['## Also in this fork', '', '| Feature | What it does | Upstream pull request |', '|---|---|---|']
-for n in [x for x in sorted(open_nums, key=rank) if x not in claimed] \
-        + [x for x in sorted(merged_nums, key=rank) if x not in claimed] \
-        + [x for x in sorted(addressed_nums, key=rank) if x not in claimed]:
+# The front page's table is the reader's newest-first list. The ledger in docs/FORK.md stays grouped
+# by area, so its rows keep looking like the ledger of a fork rather than a changelog by number.
+for n in sorted(
+    [x for x in open_nums if x not in claimed]
+    + [x for x in merged_nums if x not in claimed]
+    + [x for x in addressed_nums if x not in claimed],
+    reverse=True):
     note = prs.get(str(n)) or {}
     title = note.get('short') or '**add a short title in scripts/fork-pr-notes.json** (%s)' % info[n]['title']
     what = note.get('note') or info[n]['title']

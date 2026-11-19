@@ -177,6 +177,12 @@ rework=$(grep -cF 'This feature is **being reworked**' README.md)
 [ "$rework" = 1 ] && ok 'only the feature under rework carries the status callout' \
                   || bad "the status callout appears $rework times, expected once"
 wantnt README.md 'LoRA paths' "the LoRA entry, upstream's own, is not on the page"
+# The front-page table is newest-first by pull-request number. The ledger keeps its area order.
+order=$(sed -n '/^## Also in this fork/,/^The table lists/p' README.md \
+        | grep -oE '/pull/[0-9]+' | cut -d/ -f3)
+[ "$order" = "$(printf '%s\n' "$order" | sort -nr)" ] \
+  && ok 'the front-page table is ordered by PR number, highest first' \
+  || { bad 'the front-page table is not in descending PR order'; echo "  $order"; }
 check && ok 'the pages read back' || { bad 'the read-back'; sed 's/^/  /' "$SCRATCH/check.log"; }
 
 echo '=== 3. every feature accepted and shipped ==='
