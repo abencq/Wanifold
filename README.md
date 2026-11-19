@@ -27,8 +27,8 @@ here builds natively for Linux instead of running the Windows binaries under Win
 build it offers is a Linux source build — those pull requests are Linux-specific by what they are, not by
 oversight.
 
-The `main` branch here is an integration branch: current upstream, plus my own work — **116 files,
-+17 491 lines**, 150 authored commits, synced with upstream
+The `main` branch here is an integration branch: current upstream, plus my own work — **117 files,
++17 521 lines** (excluding an added `tests/` suite), 152 authored commits, synced with upstream
 [`f4cfc125`](https://github.com/deepbeepmeep/WanGP/commit/f4cfc1259215577be9a2ee280c41efbedfb4459a)
 (WanGP v20.00). Everything general enough is submitted upstream, which means the 3 features below
 are **not in an official WanGP release today**.
@@ -195,5 +195,5 @@ puts them, so switching either way keeps them.
 > their dates in **[docs/FORK.md](docs/FORK.md)**, and keeps the upstream licence, the in-tree notices and the
 > [third-party licence texts](docs/third_party_licenses/).
 
-<!-- front page: regenerated 2026-11-19 · 116 files +17491 lines · 150 authored commits · 15 open, 0 merged upstream -->
+<!-- front page: regenerated 2026-11-19 · 117 files +17521 lines · 152 authored commits · 15 open, 0 merged upstream -->
 <!-- END GENERATED -->
